@@ -76,7 +76,39 @@ TrinityARX читает **нейроны** и **синапсы** из MySQL и �
 
 ## Настройка базы
 
-Файл `.env` (или прямо в коде `TrinityCommands.cpp`):
+### Конфигурационный файл (Уровень 1 - для разработки)
+
+Плагин использует внешний JSON-файл `trinity_config.json` для хранения настроек подключения:
+
+```json
+{
+  "database": {
+    "host": "10.250.11.112",
+    "user": "webdev",
+    "password": "YOUR_PASSWORD_HERE",
+    "name": "trinity_core"
+  },
+  "paths": {
+    "base": "D:\\\\trinity"
+  },
+  "settings": {
+    "timer_interval_ms": 5000,
+    "logging_enabled": true
+  }
+}
+```
+
+**Важно:**
+- Файл должен находиться рядом с `_Trinity.arx`
+- Не коммитьте этот файл с реальными паролями в репозиторий
+- Используйте `trinity_config.json.example` как шаблон
+- При изменении пароля обновите только этот файл (перекомпиляция не требуется)
+
+См. `CONFIG_README.md` для подробной документации.
+
+### Старый способ (хардкод)
+
+Для совместимости можно оставить настройки прямо в коде `TrinityCommands.cpp`:
 
 ```cpp
 g_engine->init("10.250.11.112", "webdev", "1QAZxsw2", "trinity_core");

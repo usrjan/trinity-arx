@@ -1,0 +1,15 @@
+{
+  "database": {
+    "host": "10.250.11.112",
+    "user": "webdev",
+    "password": "YOUR_PASSWORD_HERE",
+    "name": "trinity_core"
+  },
+  "paths": {
+    "base": "D:\\\\trinity"
+  },
+  "settings": {
+    "timer_interval_ms": 5000,
+    "logging_enabled": true
+  }
+}
