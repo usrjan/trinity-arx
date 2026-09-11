@@ -1,16 +1,16 @@
 // TrinityAttributeBuilder.h
 #pragma once
-#include "stdafx.h"
+#include "StdAfx.h"
 #include <string>
 
 class TrinityAttributeBuilder {
 public:
-    // Добавить один скрытый атрибут с кодом детали
+    // Добавить атрибут с кодом детали (возвращает ObjectId)
     static AcDbObjectId addDetailCode(
         AcDbBlockTableRecord* pRecord,
         const std::string& code
     );
-    
-    // Создать слой _tag (красный, выключен)
+
+    // Создать слой _tag (если не существует)
     static void ensureTagLayer(AcDbDatabase* db);
 };

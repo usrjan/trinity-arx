@@ -2,39 +2,92 @@
 #pragma once
 #include "StdAfx.h"
 
-struct TrinityPosition { double x=0,y=0,z=0; AcGePoint3d toAcGe() const { return AcGePoint3d(x,y,z); } };
-struct TrinityRotation { double x=0,y=0,z=0,angle=0; };
-struct TrinityRotationCompound { TrinityRotation rotations[2]; int count=0; };
-
-struct TrinityNeuron {
-    int id=0, width=0, height=0, thickness=10, processCode=0;
-    std::string code, type, category, material, status, jsonData;
+// ============================================
+// ПОЗИЦИЯ
+// ============================================
+struct TrinityPosition {
+    double x = 0, y = 0, z = 0;
+    AcGePoint3d toAcGe() const { return AcGePoint3d(x, y, z); }
 };
 
+// ============================================
+// ПОВОРОТ (одиночный)
+// ============================================
+struct TrinityRotation {
+    double x = 0, y = 0, z = 0;   // ось
+    double angle = 0;              // угол в градусах
+};
+
+// ============================================
+// СОСТАВНОЙ ПОВОРОТ (до 2 последовательных)
+// ============================================
+struct TrinityRotationCompound {
+    TrinityRotation rotations[2];
+    int count = 0;  // 0, 1 или 2
+};
+
+// ============================================
+// НЕЙРОН
+// ============================================
+struct TrinityNeuron {
+    int id = 0;
+    std::string code;          // D.S.0.425.850.10
+    std::string type;          // detail, construction, project
+    std::string category;      // shield, rib, sidewall, formwork
+    std::string material;      // PLYWOOD-FSF
+    std::string status;        // pending, done, error
+
+    int width = 0;
+    int height = 0;
+    int thickness = 10;
+    int processCode = 0;       // 0=None, 2=Hole, 3=Socket
+
+    std::string jsonData;      // весь JSON нейрона
+};
+
+// ============================================
+// СИНАПС
+// ============================================
 struct TrinitySynapse {
-    int id=0, parentId=0, childId=0;
-    std::string childCode, status;
+    int id = 0;
+    int parentId = 0;
+    int childId = 0;
+    std::string childCode;
     TrinityPosition position;
     TrinityRotationCompound rotation;
+    std::string status;
 };
 
+// ============================================
+// ЯДРО — доступ к базе данных
+// ============================================
 class TrinityCore {
     MYSQL* m_mysql = nullptr;
     bool m_connected = false;
+
 public:
     TrinityCore() = default;
     ~TrinityCore();
+
     bool connect(const char* host, const char* user, const char* pass, const char* db);
     void disconnect();
     bool isConnected() const { return m_connected; }
     MYSQL* handle() { return m_mysql; }
 
+    // Нейроны
     TrinityNeuron* loadNeuronByCode(const std::string& code);
     TrinityNeuron* loadNeuronById(int id);
+
+    // Связи
     std::vector<TrinitySynapse> loadChildren(int parentId);
+
+    // Проекты
     std::vector<TrinityNeuron> loadPendingProjects();
+
+    // Статусы
     bool markNeuronDone(int id);
 
+    // Парсинг
     static TrinityNeuron parseNeuronRow(MYSQL_ROW row);
     static TrinitySynapse parseSynapseRow(MYSQL_ROW row);
     static TrinityPosition parsePosition(const std::string& json);

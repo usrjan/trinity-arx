@@ -3,132 +3,191 @@
 #include "TrinityGeometryBuilder.h"
 #include "TrinityLayerManager.h"
 
+// ============================================
+// ДИСПЕТЧЕР
+// ============================================
 AcDb3dSolid* TrinityGeometryBuilder::build(const TrinityNeuron& detail) {
     switch (detail.processCode) {
-        case 0: return buildBox(detail);
-        case 2: return buildSidewall(detail);
-        case 3: return buildRib(detail);
+        case 0: return buildBox(detail);       // щит
+        case 2: return buildSidewall(detail);  // боковая стенка
+        case 3: return buildRib(detail);       // планка
         default: return buildBox(detail);
     }
 }
 
+// ============================================
+// ЩИТ (прямоугольник)
+// ============================================
 AcDb3dSolid* TrinityGeometryBuilder::buildBox(const TrinityNeuron& d) {
     AcDb3dSolid* solid = new AcDb3dSolid();
     solid->createBox(d.width, d.height, d.thickness);
+
     AcGeMatrix3d mat;
     mat.setToIdentity();
     mat.setTranslation(AcGeVector3d(d.width / 2.0, d.height / 2.0, d.thickness / 2.0));
     solid->transformBy(mat);
+
     std::string layer = TrinityLayerManager::layerName(d.material);
     wchar_t layerW[256];
     MultiByteToWideChar(CP_UTF8, 0, layer.c_str(), -1, layerW, 256);
     solid->setLayer(layerW);
+
     return solid;
 }
 
+// ============================================
+// БОКОВАЯ СТЕНКА (щит со сквозными отверстиями)
+// ============================================
 AcDb3dSolid* TrinityGeometryBuilder::buildSidewall(const TrinityNeuron& d) {
-    AcDb3dSolid* solid = buildBox(d);
-    if (!solid) return nullptr;
-    double holeDiameter = 8.0, holeRadius = holeDiameter / 2.0;
-    double height = d.thickness + 2.0;
-    std::vector<AcGePoint3d> holePositions;
-    size_t holesPos = d.jsonData.find("\"holes\"");
-    if (holesPos != std::string::npos) {
-        size_t arrStart = d.jsonData.find('[', holesPos);
-        size_t arrEnd = d.jsonData.find(']', arrStart);
-        if (arrStart != std::string::npos && arrEnd != std::string::npos) {
-            std::string holesStr = d.jsonData.substr(arrStart, arrEnd - arrStart + 1);
-            size_t objPos = 0;
-            while ((objPos = holesStr.find("\"x\"", objPos)) != std::string::npos) {
-                double x = 0, y = 0;
-                size_t xVal = holesStr.find(':', objPos);
-                if (xVal != std::string::npos) x = atof(holesStr.c_str() + xVal + 1);
-                size_t yPos = holesStr.find("\"y\"", objPos);
-                if (yPos != std::string::npos) {
-                    size_t yVal = holesStr.find(':', yPos);
-                    if (yVal != std::string::npos) y = atof(holesStr.c_str() + yVal + 1);
-                }
-                holePositions.push_back(AcGePoint3d(x, y, 0));
-                objPos = yPos + 1;
-            }
-        }
-    }
-    if (holePositions.empty()) {
-        double holeDistFromEdge = 50.0, holeSpacing = 100.0;
-        for (double x = holeDistFromEdge; x < d.width - holeDistFromEdge; x += holeSpacing)
-            for (double y = holeDistFromEdge; y < d.height - holeDistFromEdge; y += holeSpacing)
-                holePositions.push_back(AcGePoint3d(x, y, 0));
-    }
-    for (const auto& pos : holePositions) {
-        AcDb3dSolid* pCylinder = new AcDb3dSolid();
-        pCylinder->createFrustum(height, holeRadius, holeRadius, holeRadius);
-        AcGeMatrix3d mat;
-        mat.setToIdentity();
-        mat.setTranslation(AcGeVector3d(pos.x, pos.y, d.thickness / 2.0));
-        pCylinder->transformBy(mat);
-        Acad::ErrorStatus es = solid->booleanOper(AcDb::kBoolSubtract, pCylinder);
-        if (es == Acad::eOk) pCylinder->erase();
-        else delete pCylinder;
-    }
+    // Просто щит. Все сверления делает buildDetail.
+    return buildBox(d);
+}
+
+// ============================================
+// ПЛАНКА (со гнёздами)
+// ============================================
+AcDb3dSolid* TrinityGeometryBuilder::buildRib(const TrinityNeuron& d) {
+    double W = d.width;
+    double H = 125.0;
+    double T = d.thickness;
+    double centerY = H / 2.0;
+
+    const double SLOT_HALF = 4.0;
+    const double SLOT_DEPTH = 23.54316771;
+    const double HOLE_OFFSET = 53.0;
+
+    // --------------------------------------------------
+    // ЛЕВОЕ ОТВЕРСТИЕ (X=0, дуга поперёк прорези)
+    // --------------------------------------------------
+    AcGePoint2d pt1Start(centerY - SLOT_HALF, W - SLOT_DEPTH);
+    AcGePoint2d pt1OnArc(centerY, W - HOLE_OFFSET);
+    AcGePoint2d pt1End(centerY + SLOT_HALF, W - SLOT_DEPTH);
+
+    AcGeCircArc2d ge1Arc(pt1Start, pt1OnArc, pt1End);
+    AcGePoint2d pt1Center = ge1Arc.center();
+    double radius1 = ge1Arc.radius();
+
+    AcGeVector2d vec1Start(pt1Start.x - pt1Center.x, pt1Start.y - pt1Center.y);
+    AcGeVector2d vec1End(pt1End.x - pt1Center.x, pt1End.y - pt1Center.y);
+    double start1Angle = vec1Start.angle();
+    double end1Angle = vec1End.angle();
+
+    AcGePoint2d pt11, pt12;
+    pt11.x = pt1Center.x + radius1 * cos(start1Angle);
+    pt11.y = pt1Center.y + radius1 * sin(start1Angle);
+    pt12.x = pt1Center.x + radius1 * cos(end1Angle);
+    pt12.y = pt1Center.y + radius1 * sin(end1Angle);
+
+    double new1Start = (start1Angle > end1Angle)
+        ? (start1Angle - 2.0 * M_PI) : start1Angle;
+
+    // --------------------------------------------------
+    // ПРАВОЕ ОТВЕРСТИЕ (X=W)
+    // --------------------------------------------------
+    AcGePoint2d pt2Start(centerY + SLOT_HALF, SLOT_DEPTH);
+    AcGePoint2d pt2OnArc(centerY, HOLE_OFFSET);
+    AcGePoint2d pt2End(centerY - SLOT_HALF, SLOT_DEPTH);
+
+    AcGeCircArc2d ge2Arc(pt2Start, pt2OnArc, pt2End);
+    AcGePoint2d pt2Center = ge2Arc.center();
+    double radius2 = ge2Arc.radius();
+
+    AcGeVector2d vec2Start(pt2Start.x - pt2Center.x, pt2Start.y - pt2Center.y);
+    AcGeVector2d vec2End(pt2End.x - pt2Center.x, pt2End.y - pt2Center.y);
+    double start2Angle = vec2Start.angle();
+    double end2Angle = vec2End.angle();
+
+    AcGePoint2d pt21, pt22;
+    pt21.x = pt2Center.x + radius2 * cos(start2Angle);
+    pt21.y = pt2Center.y + radius2 * sin(start2Angle);
+    pt22.x = pt2Center.x + radius2 * cos(end2Angle);
+    pt22.y = pt2Center.y + radius2 * sin(end2Angle);
+
+    double new2Start = (start2Angle > end2Angle)
+        ? (start2Angle - 2.0 * M_PI) : start2Angle;
+
+    // --------------------------------------------------
+    // ПОЛИЛИНИЯ КОНТУРА (12 точек)
+    // --------------------------------------------------
+    AcDbPolyline* pPoly = new AcDbPolyline(12);
+
+    pPoly->addVertexAt(0, AcGePoint2d(0.0, W), 0, 0, 0);
+    pPoly->addVertexAt(1, AcGePoint2d(centerY - 4.0, W), 0, 0, 0);
+    pPoly->addVertexAt(2, pt11, tan((end1Angle - new1Start) / 4.0), 0, 0);
+    pPoly->addVertexAt(3, pt12, 0, 0, 0);
+    pPoly->addVertexAt(4, AcGePoint2d(centerY + 4.0, W), 0, 0, 0);
+    pPoly->addVertexAt(5, AcGePoint2d(H, W), 0, 0, 0);
+    pPoly->addVertexAt(6, AcGePoint2d(H, 0.0), 0, 0, 0);
+    pPoly->addVertexAt(7, AcGePoint2d(centerY + 4.0, 0.0), 0, 0, 0);
+    pPoly->addVertexAt(8, pt21, tan((end2Angle - new2Start) / 4.0), 0, 0);
+    pPoly->addVertexAt(9, pt22, 0, 0, 0);
+    pPoly->addVertexAt(10, AcGePoint2d(centerY - 4.0, 0.0), 0, 0, 0);
+    pPoly->addVertexAt(11, AcGePoint2d(0.0, 0.0), 0, 0, 0);
+
+    if (!pPoly->isClosed()) pPoly->setClosed(true);
+
+    // --------------------------------------------------
+    // EXTRUDE (поворот контура на -90° вокруг X)
+    // --------------------------------------------------
+    TCHAR layerName[64];
+    _stprintf_s(layerName, _T("%hs"), TrinityLayerManager::layerName(d.material).c_str());
+    pPoly->setLayer(layerName);
+
+    AcGePoint3d p1(0.0, 0.0, 0.0);
+    AcGeVector3d v1(0.0, 0.0, 1.0);
+    AcGeMatrix3d mat;
+    mat.setToRotation(-(90.0 * (M_PI / 180.0)), v1, p1);
+    mat.setTranslation(AcGeVector3d(0, H, 0));
+    pPoly->transformBy(mat);
+
+    AcDbVoidPtrArray lines;
+    pPoly->explode(lines);
+    AcDbVoidPtrArray regions;
+    AcDbRegion::createFromCurves(lines, regions);
+    assert(regions.length() == 1);
+    AcDbRegion* pRegion = AcDbRegion::cast((AcRxObject*)regions[0]);
+    assert(pRegion != NULL);
+    pPoly->erase();
+    pPoly->close();
+
+    AcDb3dSolid* solid = new AcDb3dSolid();
+    solid->extrude(pRegion, T, 0.0);
+
+    for (int i = 0; i < lines.length(); i++) delete (AcRxObject*)lines[i];
+    for (int i = 0; i < regions.length(); i++) delete (AcRxObject*)regions[i];
+
+    solid->setLayer(layerName);
+
     return solid;
 }
 
-AcDb3dSolid* TrinityGeometryBuilder::buildRib(const TrinityNeuron& d) {
-    double W = d.width, H = 125.0, T = d.thickness, centerY = H / 2.0;
-    const double SLOT_HALF = 4.0, SLOT_DEPTH = 23.54316771, HOLE_OFFSET = 53.0;
-    AcGePoint3dArray pts;
-    pts.setLogicalLength(12);
-    pts[0].set(0.0, W, 0.0);
-    pts[1].set(centerY - SLOT_HALF, W, 0.0);
-    AcGePoint2d p1s(centerY - SLOT_HALF, W - SLOT_DEPTH), p1m(centerY, W - HOLE_OFFSET), p1e(centerY + SLOT_HALF, W - SLOT_DEPTH);
-    AcGeCircArc2d arc1(p1s, p1m, p1e);
-    pts[2].set(arc1.startPoint().x, arc1.startPoint().y, 0.0);
-    pts[3].set(arc1.endPoint().x, arc1.endPoint().y, 0.0);
-    pts[4].set(centerY + SLOT_HALF, W, 0.0);
-    pts[5].set(H, W, 0.0);
-    pts[6].set(H, 0.0, 0.0);
-    pts[7].set(centerY + SLOT_HALF, 0.0, 0.0);
-    AcGePoint2d p2s(centerY + SLOT_HALF, SLOT_DEPTH), p2m(centerY, HOLE_OFFSET), p2e(centerY - SLOT_HALF, SLOT_DEPTH);
-    AcGeCircArc2d arc2(p2s, p2m, p2e);
-    pts[8].set(arc2.startPoint().x, arc2.startPoint().y, 0.0);
-    pts[9].set(arc2.endPoint().x, arc2.endPoint().y, 0.0);
-    pts[10].set(centerY - SLOT_HALF, 0.0, 0.0);
-    pts[11].set(0.0, 0.0, 0.0);
-    return extrudeProfile(pts, T);
-}
-
+// ============================================
+// ЭКСТРУЗИЯ ПРОФИЛЯ (фолбэк, если нужен)
+// ============================================
 AcDb3dSolid* TrinityGeometryBuilder::extrudeProfile(const AcGePoint3dArray& pts, double height) {
     AcDbPolyline* pPoly = new AcDbPolyline();
     for (int i = 0; i < pts.length(); i++) pPoly->addVertexAt(i, AcGePoint2d(pts[i].x, pts[i].y));
-    if (pts.length() >= 4) {
-        AcGePoint2d a(pts[1].x, pts[1].y), b(pts[2].x, pts[2].y), c(pts[3].x, pts[3].y);
-        AcGeCircArc2d arc(a, b, c);
-        double startAng = AcGeVector2d(a.x - arc.center().x, a.y - arc.center().y).angle();
-        double endAng = AcGeVector2d(c.x - arc.center().x, c.y - arc.center().y).angle();
-        if (startAng > endAng) startAng -= 2.0 * M_PI;
-        pPoly->setBulgeAt(2, tan((endAng - startAng) / 4.0));
-    }
     pPoly->setClosed(true);
-    AcGeMatrix3d matRot;
-    matRot.setToRotation(-M_PI / 2.0, AcGeVector3d(1, 0, 0), AcGePoint3d(0, 0, 0));
-    matRot.setTranslation(AcGeVector3d(0, 125.0, 0));
-    pPoly->transformBy(matRot);
+
     AcDbVoidPtrArray lines, regions;
     pPoly->explode(lines);
     AcDbRegion::createFromCurves(lines, regions);
     AcDbRegion* pRegion = AcDbRegion::cast((AcRxObject*)regions[0]);
-    pPoly->erase(); pPoly->close();
+    pPoly->erase();
+    pPoly->close();
+
     AcDb3dSolid* solid = new AcDb3dSolid();
     solid->extrude(pRegion, height, 0.0);
+
     for (int i = 0; i < lines.length(); i++) delete (AcRxObject*)lines[i];
     for (int i = 0; i < regions.length(); i++) delete (AcRxObject*)regions[i];
-    std::string layer = TrinityLayerManager::layerName("PLYWOOD-FSF");
-    wchar_t layerW[256];
-    MultiByteToWideChar(CP_UTF8, 0, layer.c_str(), -1, layerW, 256);
-    solid->setLayer(layerW);
+
     return solid;
 }
 
+// ============================================
+// БОЛТЫ
+// ============================================
 std::vector<AcGePoint3d> TrinityGeometryBuilder::getBoltPositions(const TrinityNeuron& d) {
     std::vector<AcGePoint3d> positions;
     double bolt_y = d.height / 2.0;
@@ -140,15 +199,18 @@ std::vector<AcGePoint3d> TrinityGeometryBuilder::getBoltPositions(const TrinityN
     return positions;
 }
 
-void TrinityGeometryBuilder::drawBoltMarkers(const TrinityNeuron& d, AcDbBlockTableRecord* pMs, AcDbObjectIdArray& ids) {
+void TrinityGeometryBuilder::drawBoltMarkers(const TrinityNeuron& d,
+                                               AcDbBlockTableRecord* pMs,
+                                               AcDbObjectIdArray& ids) {
     double boltRadius = 3.0;
     auto positions = getBoltPositions(d);
     for (const auto& pos : positions) {
         AcDbCircle* pCircle = new AcDbCircle();
         pCircle->setCenter(pos);
         pCircle->setRadius(boltRadius);
-        pCircle->setNormal(AcGeVector3d(1, 0, 0));
+        pCircle->setNormal(AcGeVector3d(1, 0, 0));  // плоскость YZ
         pCircle->setLayer(_T("_bolt"));
+
         AcDbObjectId circleId;
         pMs->appendAcDbEntity(circleId, pCircle);
         pCircle->close();
@@ -156,8 +218,15 @@ void TrinityGeometryBuilder::drawBoltMarkers(const TrinityNeuron& d, AcDbBlockTa
     }
 }
 
-void TrinityGeometryBuilder::transform(AcDb3dSolid* solid, const TrinityPosition& pos, const TrinityRotationCompound& rot) {
-    AcGeMatrix3d mat; mat.setToIdentity();
+// ============================================
+// ТРАНСФОРМАЦИЯ (compound rotation)
+// ============================================
+void TrinityGeometryBuilder::transform(AcDb3dSolid* solid,
+                                        const TrinityPosition& pos,
+                                        const TrinityRotationCompound& rot) {
+    AcGeMatrix3d mat;
+    mat.setToIdentity();
+
     for (int i = 0; i < rot.count; i++) {
         const auto& r = rot.rotations[i];
         if (r.angle != 0) {
@@ -170,6 +239,7 @@ void TrinityGeometryBuilder::transform(AcDb3dSolid* solid, const TrinityPosition
             }
         }
     }
+
     mat.setTranslation(AcGeVector3d(pos.x, pos.y, pos.z));
     solid->transformBy(mat);
 }
