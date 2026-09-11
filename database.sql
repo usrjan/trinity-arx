@@ -52,7 +52,7 @@ CREATE TABLE IF NOT EXISTS `text` (
 CREATE TABLE IF NOT EXISTS `neuron` (
     `id` INT UNSIGNED NOT NULL AUTO_INCREMENT,
     `pid` INT UNSIGNED DEFAULT NULL,       -- родительский нейрон (NULL = корень)
-    `type` ENUM('tree','item','file','user','calc','plugin','migration','route','config','template','command','project','construction','detail') NOT NULL DEFAULT 'item',
+    `type` ENUM('tree','item','file','user','calc','plugin','migration','route','config','template','command','project','construction','detail','job','schedule','event_listener') NOT NULL DEFAULT 'item',
     `tree` INT UNSIGNED DEFAULT NULL,      -- привязка к дереву (для группировки)
     `text` INT UNSIGNED DEFAULT NULL,      -- ссылка на text.key (для мультиязычного контента)
     `data` JSON DEFAULT NULL,              -- все остальные данные в JSON
@@ -67,18 +67,65 @@ CREATE TABLE IF NOT EXISTS `neuron` (
     `is_deleted` TINYINT(1) GENERATED ALWAYS AS (CASE WHEN JSON_EXTRACT(`data`, '$.deleted_at') IS NOT NULL THEN 1 ELSE 0 END) STORED,
     `hash` VARCHAR(64) GENERATED ALWAYS AS (SHA2(CONCAT(CAST(COALESCE(`pid`, '') AS CHAR), `type`, CAST(COALESCE(`data`, '') AS CHAR)), 256)) STORED,
     
+    -- Виртуальные столбцы для задач (jobs)
+    `job_class` VARCHAR(255) GENERATED ALWAYS AS (JSON_UNQUOTE(JSON_EXTRACT(`data`, '$.job_class'))) STORED,
+    `job_queue` VARCHAR(50) GENERATED ALWAYS AS (COALESCE(JSON_UNQUOTE(JSON_EXTRACT(`data`, '$.queue_name')), 'default')) STORED,
+    `job_status` VARCHAR(20) GENERATED ALWAYS AS (COALESCE(JSON_UNQUOTE(JSON_EXTRACT(`data`, '$.status')), 'pending')) STORED,
+    `job_attempts` INT GENERATED ALWAYS AS (COALESCE(JSON_EXTRACT(`data`, '$.attempts'), 0)) STORED,
+    `job_max_attempts` INT GENERATED ALWAYS AS (COALESCE(JSON_EXTRACT(`data`, '$.max_attempts'), 3)) STORED,
+    `job_executed_at` DATETIME GENERATED ALWAYS AS (JSON_EXTRACT(`data`, '$.executed_at')) STORED,
+    `job_error_message` TEXT GENERATED ALWAYS AS (JSON_UNQUOTE(JSON_EXTRACT(`data`, '$.error_message'))) STORED,
+    
+    -- Виртуальные столбцы для планировщика (schedule)
+    `schedule_cron` VARCHAR(100) GENERATED ALWAYS AS (JSON_UNQUOTE(JSON_EXTRACT(`data`, '$.cron_expression'))) STORED,
+    `schedule_command` VARCHAR(255) GENERATED ALWAYS AS (JSON_UNQUOTE(JSON_EXTRACT(`data`, '$.command'))) STORED,
+    `schedule_last_run` DATETIME GENERATED ALWAYS AS (JSON_EXTRACT(`data`, '$.last_run')) STORED,
+    `schedule_next_run` DATETIME GENERATED ALWAYS AS (JSON_EXTRACT(`data`, '$.next_run')) STORED,
+    `schedule_is_active` TINYINT(1) GENERATED ALWAYS AS (COALESCE(JSON_EXTRACT(`data`, '$.is_active'), 1)) STORED,
+    
+    -- Виртуальные столбцы для событий (event_listener)
+    `event_name` VARCHAR(100) GENERATED ALWAYS AS (JSON_UNQUOTE(JSON_EXTRACT(`data`, '$.event_name'))) STORED,
+    `event_priority` INT GENERATED ALWAYS AS (COALESCE(JSON_EXTRACT(`data`, '$.priority'), 0)) STORED,
+    `event_callback` VARCHAR(255) GENERATED ALWAYS AS (JSON_UNQUOTE(JSON_EXTRACT(`data`, '$.callback'))) STORED,
+    `event_is_active` TINYINT(1) GENERATED ALWAYS AS (COALESCE(JSON_EXTRACT(`data`, '$.is_active'), 1)) STORED,
+    
     PRIMARY KEY (`id`),
+    -- Базовые индексы
     INDEX `idx_pid` (`pid`),
     INDEX `idx_type` (`type`),
     INDEX `idx_tree` (`tree`),
     INDEX `idx_text` (`text`),
-    INDEX `idx_slug_pid` (`pid`, `slug`),
+    INDEX `idx_date` (`date`),
+    
+    -- Композитные индексы для иерархии и каталогов
+    INDEX `idx_pid_type` (`pid`, `type`),
+    INDEX `idx_pid_sort` (`pid`, `sort`),
+    INDEX `idx_tree_type` (`tree`, `type`),
+    INDEX `idx_pid_slug` (`pid`, `slug`),
+    
+    -- Индексы для маршрутов и пользователей
     INDEX `idx_route` (`route`(255)),
-    INDEX `idx_sort` (`pid`, `sort`),
     INDEX `idx_login` (`login`),
     INDEX `idx_email` (`email`),
+    
+    -- Индексы для мягкого удаления и хеша
     INDEX `idx_deleted` (`is_deleted`),
-    INDEX `idx_hash` (`hash`(64))
+    INDEX `idx_hash` (`hash`(64)),
+    
+    -- === Индексы для задач (jobs) ===
+    INDEX `idx_job_status_queue` (`job_status`, `job_queue`),
+    INDEX `idx_job_status_type` (`type`, `job_status`, `job_queue`),
+    INDEX `idx_job_executed` (`job_executed_at`),
+    
+    -- === Индексы для планировщика (schedule) ===
+    INDEX `idx_schedule_active_next` (`schedule_is_active`, `schedule_next_run`),
+    INDEX `idx_schedule_type_active` (`type`, `schedule_is_active`, `schedule_next_run`),
+    INDEX `idx_schedule_cron` (`schedule_cron`),
+    
+    -- === Индексы для событий (event_listener) ===
+    INDEX `idx_event_name_priority` (`event_name`, `event_priority`),
+    INDEX `idx_event_type_active` (`type`, `event_is_active`, `event_name`),
+    INDEX `idx_event_active` (`event_is_active`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 -- ============================================
@@ -105,12 +152,30 @@ CREATE TABLE IF NOT EXISTS `synapse` (
     `hash` VARCHAR(64) GENERATED ALWAYS AS (SHA2(CONCAT(CAST(COALESCE(`parent`, '') AS CHAR), CAST(COALESCE(`child`, '') AS CHAR), CAST(COALESCE(`data`, '') AS CHAR)), 256)) STORED,
     
     PRIMARY KEY (`id`),
+    -- Базовые индексы
     INDEX `idx_tree` (`tree`),
     INDEX `idx_parent` (`parent`),
     INDEX `idx_child` (`child`),
+    INDEX `idx_time` (`time`),
+    
+    -- Композитные индексы для связей
     INDEX `idx_parent_child` (`parent`, `child`),
+    INDEX `idx_parent_child_time` (`parent`, `child`, `time`),
+    INDEX `idx_child_parent` (`child`, `parent`),
+    INDEX `idx_tree_parent` (`tree`, `parent`),
+    
+    -- Индексы для типов связей и истории атрибутов
     INDEX `idx_relation_type` (`relation_type`),
-    INDEX `idx_hash` (`hash`(64))
+    INDEX `idx_parent_relation` (`parent`, `relation_type`),
+    INDEX `idx_parent_relation_time` (`parent`, `relation_type`, `time`),
+    
+    -- Индексы для текстовых ссылок
+    INDEX `idx_text_key` (`text_key`),
+    INDEX `idx_text_id` (`text_id`),
+    
+    -- Технические индексы
+    INDEX `idx_hash` (`hash`(64)),
+    INDEX `idx_created_at` (`created_at`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 -- ============================================
@@ -145,7 +210,7 @@ INSERT INTO `text` (`key`, `lang`, `name`, `text`) VALUES
 (21, 'ru', 'Галерея', NULL);
 
 -- ============================================
--- 5. НЕЙРОНЫ — ИЕРАРХИЯ
+-- 6. НЕЙРОНЫ — ИЕРАРХИЯ
 -- ============================================
 -- Структура:
 --   SYSTEM (1)        — системные настройки и пользователи
@@ -280,7 +345,6 @@ INSERT INTO `neuron` (`id`, `pid`, `type`, `text`, `data`) VALUES
 INSERT INTO `synapse` (`parent`, `child`, `data`, `time`) VALUES
 (31, 5, '{"relation":"has_role","granted_by":"system"}', NOW()),   -- admin → role_admin
 (31, 8, '{"relation":"member_of"}', NOW());                         -- admin → group_admins
-
 
 
 -- ============================================
