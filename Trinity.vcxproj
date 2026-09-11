@@ -90,6 +90,7 @@
     <ClCompile Include="TrinityAttributeBuilder.cpp" />
     <ClCompile Include="TrinityBuildEngine.cpp" />
     <ClCompile Include="TrinityCommands.cpp" />
+    <ClCompile Include="TrinityConfig.cpp" />
     <ClCompile Include="TrinityCore.cpp" />
     <ClCompile Include="TrinityFileManager.cpp" />
     <ClCompile Include="TrinityGeometryBuilder.cpp" />
@@ -99,6 +100,7 @@
     <ClInclude Include="TrinityAttributeBuilder.h" />
     <ClInclude Include="TrinityBuildEngine.h" />
     <ClInclude Include="TrinityCommands.h" />
+    <ClInclude Include="TrinityConfig.h" />
     <ClInclude Include="TrinityCore.h" />
     <ClInclude Include="TrinityFileManager.h" />
     <ClInclude Include="TrinityGeometryBuilder.h" />

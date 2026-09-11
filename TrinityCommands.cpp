@@ -1,6 +1,7 @@
 // TrinityCommands.cpp
 #include "StdAfx.h"
 #include "TrinityCommands.h"
+#include "TrinityConfig.h"
 
 TrinityBuildEngine* g_engine = nullptr;
 UINT_PTR g_timerId = 0;
@@ -21,10 +22,19 @@ void trinityStart() {
         return;
     }
 
-    if (!g_engine) {
-        g_engine = new TrinityBuildEngine("D:\\trinity");
+    // Загружаем конфигурацию из файла
+    const std::string configPath = "trinity_config.json";
+    TrinityConfig::loadFromFile(configPath);
 
-        if (!g_engine->init("10.250.11.112", "webdev", "1QAZxsw2", "trinity_core")) {
+    if (!g_engine) {
+        const auto& pathConfig = TrinityConfig::getPathConfig();
+        g_engine = new TrinityBuildEngine(pathConfig.basePath);
+
+        const auto& dbConfig = TrinityConfig::getDbConfig();
+        if (!g_engine->init(dbConfig.host.c_str(), 
+                            dbConfig.user.c_str(), 
+                            dbConfig.password.c_str(), 
+                            dbConfig.database.c_str())) {
             acutPrintf(_T("\n[Trinity] Failed to connect to database\n"));
             delete g_engine;
             g_engine = nullptr;
@@ -32,9 +42,10 @@ void trinityStart() {
         }
     }
 
-    g_timerId = SetTimer(NULL, NULL, 5000, TimerProc);
+    const auto& settingsConfig = TrinityConfig::getSettingsConfig();
+    g_timerId = SetTimer(NULL, NULL, settingsConfig.timerIntervalMs, TimerProc);
 
-    acutPrintf(_T("\n[Trinity] Timer started. Every 5 seconds.\n"));
+    acutPrintf(_T("\n[Trinity] Timer started. Interval: %d ms\n"), settingsConfig.timerIntervalMs);
 }
 
 // ============================================
