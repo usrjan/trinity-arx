@@ -1,6 +1,7 @@
 // TrinityCore.h
 #pragma once
 #include "StdAfx.h"
+#include "TrinityMemory.h"
 
 // ============================================
 // ПОЗИЦИЯ

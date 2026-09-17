@@ -31,8 +31,8 @@ AcDbObjectId TrinityBuildEngine::ensureExists(const std::string& code,
         return AcDbObjectId::kNull;
     }
 
-    // 1. Загружаем нейрон
-    TrinityNeuron* pNeuron = m_core.loadNeuronByCode(code);
+    // 1. Загружаем нейрон с RAII-обёрткой
+    TrinityNeuronPtr pNeuron(m_core.loadNeuronByCode(code));
     if (!pNeuron) {
         wchar_t* wCode = utf2uni(code.c_str());
         acutPrintf(_T("\n[BuildEngine] Neuron not found: %s\n"), wCode);
@@ -41,7 +41,7 @@ AcDbObjectId TrinityBuildEngine::ensureExists(const std::string& code,
     }
 
     TrinityNeuron neuron = *pNeuron;
-    delete pNeuron;
+    // delete pNeuron больше не нужен - удалится автоматически при выходе из функции
 
     // 2. Определяем подкаталог
     std::string subdir;
@@ -72,12 +72,12 @@ AcDbObjectId TrinityBuildEngine::ensureExists(const std::string& code,
     free(wCode);
     free(wType);
 
-    AcDbDatabase* cleanDb = nullptr;
+    DatabasePtr cleanDb(nullptr);
 
     if (neuron.type == "detail") {
-        cleanDb = buildDetail(neuron);
+        cleanDb.reset(buildDetail(neuron));
     } else {
-        cleanDb = buildDwg(neuron, depth);
+        cleanDb.reset(buildDwg(neuron, depth));
     }
 
     if (!cleanDb) {
@@ -85,8 +85,8 @@ AcDbObjectId TrinityBuildEngine::ensureExists(const std::string& code,
     }
 
     // 5. Сохраняем
-    m_files.saveDwg(cleanDb, filePath);
-    delete cleanDb;
+    m_files.saveDwg(cleanDb.get(), filePath);
+    // delete cleanDb больше не нужен - удалится автоматически
 
     // Пауза для файловой системы
     Sleep(200);
@@ -111,17 +111,16 @@ AcDbObjectId TrinityBuildEngine::ensureExists(const std::string& code,
 //  10. Переназначение слоёв: solid → материал, circle → _bolt, attr → _tag
 // ============================================================
 AcDbDatabase* TrinityBuildEngine::buildDetail(const TrinityNeuron& detail) {
-    AcDbDatabase* tempDb = new AcDbDatabase(Adesk::kTrue, Adesk::kTrue);
+    DatabasePtr tempDb(new AcDbDatabase(Adesk::kTrue, Adesk::kTrue));
     if (!tempDb) return nullptr;
 
     // Слой материала
-    TrinityLayerManager::createOrGetLayer(tempDb, detail.material);
+    TrinityLayerManager::createOrGetLayer(tempDb.get(), detail.material);
 
     // Строим геометрию
     AcDb3dSolid* solid = TrinityGeometryBuilder::build(detail);
     if (!solid) {
-        delete tempDb;
-        return nullptr;
+        return nullptr; // tempDb удалится автоматически
     }
 
     // Назначаем слой
@@ -147,7 +146,7 @@ AcDbDatabase* TrinityBuildEngine::buildDetail(const TrinityNeuron& detail) {
     // БОЛТЫ ДЛЯ ПЛАНОК
     // ============================================================
     if (detail.category == "rib") {
-        TrinityLayerManager::ensureBoltLayer(tempDb);
+        TrinityLayerManager::ensureBoltLayer(tempDb.get());
         TrinityGeometryBuilder::drawBoltMarkers(detail, pMs, ids);
     }
 
@@ -194,7 +193,7 @@ AcDbDatabase* TrinityBuildEngine::buildDetail(const TrinityNeuron& detail) {
 
         // Сверлим
         for (const auto& pos : holePositions) {
-            AcDb3dSolid* pCylinder = new AcDb3dSolid();
+            SolidPtr pCylinder(new AcDb3dSolid());
             pCylinder->createFrustum(height, holeRadius, holeRadius, holeRadius);
 
             AcGeMatrix3d mat;
@@ -202,11 +201,11 @@ AcDbDatabase* TrinityBuildEngine::buildDetail(const TrinityNeuron& detail) {
             mat.setTranslation(AcGeVector3d(pos.x, pos.y, detail.thickness / 2.0));
             pCylinder->transformBy(mat);
 
-            Acad::ErrorStatus es = solid->booleanOper(AcDb::kBoolSubtract, pCylinder);
+            Acad::ErrorStatus es = solid->booleanOper(AcDb::kBoolSubtract, pCylinder.get());
 
             // После booleanOper цилиндр либо NULL solid, либо невалиден
-            // Освобождаем память — НЕ вызываем erase()
-            delete pCylinder;
+            // Освобождаем память через release() - удалим в деструкторе
+            pCylinder.release();
 
             if (es == Acad::eOk) {
                 acutPrintf(_T("\n[Geometry] Hole drilled at (%.1f, %.1f)\n"), pos.x, pos.y);
@@ -227,7 +226,7 @@ AcDbDatabase* TrinityBuildEngine::buildDetail(const TrinityNeuron& detail) {
     // ============================================================
     // АТРИБУТЫ (DETAIL_CODE на слое _tag)
     // ============================================================
-    TrinityAttributeBuilder::ensureTagLayer(tempDb);
+    TrinityAttributeBuilder::ensureTagLayer(tempDb.get());
     AcDbObjectId attrId = TrinityAttributeBuilder::addDetailCode(pMs, detail.code);
     if (attrId != AcDbObjectId::kNull) {
         ids.append(attrId);
@@ -240,7 +239,7 @@ AcDbDatabase* TrinityBuildEngine::buildDetail(const TrinityNeuron& detail) {
     // ============================================================
     AcDbDatabase* cleanDb = nullptr;
     Acad::ErrorStatus es = tempDb->wblock(cleanDb, ids, AcGePoint3d::kOrigin);
-    delete tempDb;
+    // tempDb удалится автоматически
 
     if (es != Acad::eOk || !cleanDb) {
         delete cleanDb;
@@ -316,7 +315,7 @@ AcDbDatabase* TrinityBuildEngine::buildDwg(const TrinityNeuron& neuron, int dept
         return buildDetail(neuron);
     }
 
-    AcDbDatabase* tempDb = new AcDbDatabase(Adesk::kTrue, Adesk::kTrue);
+    DatabasePtr tempDb(new AcDbDatabase(Adesk::kTrue, Adesk::kTrue));
     if (!tempDb) return nullptr;
 
     AcDbObjectIdArray ids;
@@ -345,7 +344,7 @@ AcDbDatabase* TrinityBuildEngine::buildDwg(const TrinityNeuron& neuron, int dept
 
         // НЕ держим Model Space открытым — attachXref сам его откроет
         AcDbObjectId childId = m_files.attachXref(
-            childFilePath, syn.childCode, childPos, syn.rotation, tempDb);
+            childFilePath, syn.childCode, childPos, syn.rotation, tempDb.get());
 
         if (childId != AcDbObjectId::kNull) {
             ids.append(childId);
@@ -363,13 +362,12 @@ AcDbDatabase* TrinityBuildEngine::buildDwg(const TrinityNeuron& neuron, int dept
     acutPrintf(_T("\n[BuildEngine] buildDwg loop done, ids.length=%d\n"), (int)ids.length());
 
     if (ids.isEmpty()) {
-        delete tempDb;
-        return nullptr;
+        return nullptr; // tempDb удалится автоматически
     }
 
     AcDbDatabase* cleanDb = nullptr;
     Acad::ErrorStatus es = tempDb->wblock(cleanDb, ids, AcGePoint3d::kOrigin);
-    delete tempDb;
+    // tempDb удалится автоматически
 
     if (es != Acad::eOk || !cleanDb) {
         delete cleanDb;
@@ -400,12 +398,12 @@ std::string TrinityBuildEngine::ensureFileExists(const std::string& code, int de
         return "";
     }
 
-    // Загружаем нейрон
-    TrinityNeuron* pNeuron = m_core.loadNeuronByCode(code);
+    // Загружаем нейрон с RAII-обёрткой
+    TrinityNeuronPtr pNeuron(m_core.loadNeuronByCode(code));
     if (!pNeuron) return "";
 
     TrinityNeuron neuron = *pNeuron;
-    delete pNeuron;
+    // delete pNeuron больше не нужен - удалится автоматически
 
     // Определяем подкаталог
     std::string subdir;
