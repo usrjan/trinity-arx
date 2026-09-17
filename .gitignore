@@ -1,5 +1,5 @@
 ```
-# Compiled and build artifacts
+# Build artifacts
 *.obj
 *.exe
 *.dll
@@ -7,69 +7,45 @@
 *.pdb
 *.ilk
 *.exp
-*.so
-*.dylib
-*.a
-
-# Build directories
-Debug/
-Release/
-x64/
-Win32/
-build/
-dist/
-out/
+*.iobj
+*.ipdb
+*.tlog
+*.lastbuildstate
+*.vcxproj.user
+*.sdf
+*.opensdf
+*.suo
+*.VC.db
+*.VC.VC.opendb
 
 # Dependencies
 node_modules/
 vendor/
-packages/
 
-# Logs and temp files
+# Logs
 *.log
-*.tmp
-*.temp
-*.cache
-
-# Editors
-.vs/
-.vscode/
-.idea/
-*.swp
-*.swo
 
 # Environment
 .env
 .env.local
 *.env.*
 
-# OS generated files
+# Editors
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
 .DS_Store
 Thumbs.db
-desktop.ini
 
-# Coverage reports
+# Coverage
 coverage/
 htmlcov/
-.coverage
+*.coverage
 
-# Python specific
-__pycache__/
-*.pyc
-*.pyo
-*.pyd
-.Python
-*.so
-
-# MyPy cache
-.mypy_cache/
-.pytest_cache/
-
-# Gradle
-.gradle/
-build/
-
-# Compressed files
+# Compressed
 *.zip
 *.gz
 *.tar

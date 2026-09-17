@@ -87,6 +87,7 @@
       <PrecompiledHeader Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">Create</PrecompiledHeader>
       <PrecompiledHeader Condition="'$(Configuration)|$(Platform)'=='Release|x64'">Create</PrecompiledHeader>
     </ClCompile>
+    <ClCompile Include="DynamicShieldBuilder.cpp" />
     <ClCompile Include="TrinityAttributeBuilder.cpp" />
     <ClCompile Include="TrinityBuildEngine.cpp" />
     <ClCompile Include="TrinityCommands.cpp" />
@@ -98,6 +99,7 @@
     <ClCompile Include="TrinityLayerManager.cpp" />
   </ItemGroup>
   <ItemGroup>
+    <ClInclude Include="DynamicShieldBuilder.h" />
     <ClInclude Include="TrinityAttributeBuilder.h" />
     <ClInclude Include="TrinityBuildEngine.h" />
     <ClInclude Include="TrinityCommands.h" />
