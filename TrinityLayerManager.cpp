@@ -1,6 +1,7 @@
 // TrinityLayerManager.cpp
 #include "StdAfx.h"
 #include "TrinityLayerManager.h"
+#include "TrinityMemory.h"
 
 // ============================================
 // ИМЯ СЛОЯ ПО МАТЕРИАЛУ
@@ -34,14 +35,14 @@ AcDbObjectId TrinityLayerManager::createOrGetLayer(AcDbDatabase* db, const std::
 
     AcDbObjectId layerId;
     if (!pLayerTable->has(layerNameW)) {
-        AcDbLayerTableRecord* pRecord = new AcDbLayerTableRecord();
+        LayerRecordPtr pRecord(new AcDbLayerTableRecord());
         pRecord->setName(layerNameW);
 
         AcCmColor color;
         color.setColorIndex(colorIndex(materialCode));
         pRecord->setColor(color);
 
-        pLayerTable->add(layerId, pRecord);
+        pLayerTable->add(layerId, pRecord.get());
         pRecord->close();
     } else {
         pLayerTable->getAt(layerNameW, layerId);
@@ -59,7 +60,7 @@ void TrinityLayerManager::ensureTagLayer(AcDbDatabase* db) {
     if (db->getSymbolTable(pLayerTable, AcDb::kForWrite) != Acad::eOk) return;
 
     if (!pLayerTable->has(_T("_tag"))) {
-        AcDbLayerTableRecord* pRecord = new AcDbLayerTableRecord();
+        LayerRecordPtr pRecord(new AcDbLayerTableRecord());
         pRecord->setName(_T("_tag"));
 
         AcCmColor color;
@@ -68,7 +69,7 @@ void TrinityLayerManager::ensureTagLayer(AcDbDatabase* db) {
         pRecord->setIsOff(true);
 
         AcDbObjectId layerId = AcDbObjectId::kNull;
-        pLayerTable->add(layerId, pRecord);
+        pLayerTable->add(layerId, pRecord.get());
         pRecord->close();
     }
 
@@ -82,7 +83,7 @@ void TrinityLayerManager::ensureBoltLayer(AcDbDatabase* db) {
     if (db->getSymbolTable(pLayerTable, AcDb::kForWrite) != Acad::eOk) return;
 
     if (!pLayerTable->has(_T("_bolt"))) {
-        AcDbLayerTableRecord* pRecord = new AcDbLayerTableRecord();
+        LayerRecordPtr pRecord(new AcDbLayerTableRecord());
         pRecord->setName(_T("_bolt"));
 
         AcCmColor color;
@@ -91,7 +92,7 @@ void TrinityLayerManager::ensureBoltLayer(AcDbDatabase* db) {
         pRecord->setIsOff(true);
 
         AcDbObjectId layerId = AcDbObjectId::kNull;
-        pLayerTable->add(layerId, pRecord);
+        pLayerTable->add(layerId, pRecord.get());
         pRecord->close();
     }
 

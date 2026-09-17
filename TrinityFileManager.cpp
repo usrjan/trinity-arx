@@ -1,6 +1,7 @@
 // TrinityFileManager.cpp
 #include "StdAfx.h"
 #include "TrinityFileManager.h"
+#include "TrinityMemory.h"
 #include <direct.h>
 #include <io.h>
 
@@ -67,13 +68,13 @@ AcDbObjectId TrinityFileManager::attachXref(
 
     // Шаг 2: если блока нет — читаем файл и вставляем
     if (blockId == AcDbObjectId::kNull) {
-        AcDbDatabase* pXrefDb = new AcDbDatabase(Adesk::kTrue, Adesk::kTrue);
+        DatabasePtr pXrefDb(new AcDbDatabase(Adesk::kTrue, Adesk::kTrue));
         es = pXrefDb->readDwgFile(pathW);
 
         if (es == Acad::eOk) {
-            es = targetDb->insert(blockId, nameW, pXrefDb, true);
+            es = targetDb->insert(blockId, nameW, pXrefDb.get(), true);
         }
-        delete pXrefDb;
+        // pXrefDb удалится автоматически при выходе из функции
 
         // Шаг 3: ОБРАБОТКА РЕЗУЛЬТАТА
         if (es == Acad::eDuplicateKey) {
@@ -108,7 +109,7 @@ AcDbObjectId TrinityFileManager::attachXref(
     pBt->getAt(ACDB_MODEL_SPACE, pMs, AcDb::kForWrite);
     pBt->close();
 
-    AcDbBlockReference* pRef = new AcDbBlockReference(pos, blockId);
+    BlockReferencePtr pRef(new AcDbBlockReference(pos, blockId));
 
     if (rot.count > 0) {
         AcGeMatrix3d mat;
@@ -129,7 +130,7 @@ AcDbObjectId TrinityFileManager::attachXref(
     }
 
     AcDbObjectId refId;
-    pMs->appendAcDbEntity(refId, pRef);
+    pMs->appendAcDbEntity(refId, pRef.get());
     pRef->close();
     pMs->close();
 
