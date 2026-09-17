@@ -1,6 +1,7 @@
 // TrinityAttributeBuilder.cpp
 #include "StdAfx.h"
 #include "TrinityAttributeBuilder.h"
+#include "TrinityMemory.h"
 
 // ============================================
 // ДОБАВИТЬ АТРИБУТ С КОДОМ ДЕТАЛИ
@@ -14,7 +15,7 @@ AcDbObjectId TrinityAttributeBuilder::addDetailCode(
     wchar_t codeW[256];
     MultiByteToWideChar(CP_UTF8, 0, code.c_str(), -1, codeW, 256);
 
-    AcDbAttributeDefinition* pAttdef = new AcDbAttributeDefinition();
+    AttributeDefPtr pAttdef(new AcDbAttributeDefinition());
 
     pAttdef->setPosition(AcGePoint3d::kOrigin);
     pAttdef->setTextString(codeW);
@@ -34,7 +35,7 @@ AcDbObjectId TrinityAttributeBuilder::addDetailCode(
     pAttdef->setLayer(_T("_tag"));
 
     AcDbObjectId attrId;
-    pRecord->appendAcDbEntity(attrId, pAttdef);
+    pRecord->appendAcDbEntity(attrId, pAttdef.get());
     pAttdef->close();
 
     return attrId;
@@ -51,7 +52,7 @@ void TrinityAttributeBuilder::ensureTagLayer(AcDbDatabase* db) {
     if (es != Acad::eOk) return;
 
     if (!pLayerTable->has(_T("_tag"))) {
-        AcDbLayerTableRecord* pRecord = new AcDbLayerTableRecord();
+        LayerRecordPtr pRecord(new AcDbLayerTableRecord());
         pRecord->setName(_T("_tag"));
 
         AcCmColor color;
@@ -61,7 +62,7 @@ void TrinityAttributeBuilder::ensureTagLayer(AcDbDatabase* db) {
 
         // НЕКОНСТАНТНАЯ переменная для add()
         AcDbObjectId layerId = AcDbObjectId::kNull;
-        pLayerTable->add(layerId, pRecord);
+        pLayerTable->add(layerId, pRecord.get());
         pRecord->close();
     }
 
