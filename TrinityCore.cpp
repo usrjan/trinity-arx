@@ -69,6 +69,8 @@ TrinityNeuron* TrinityCore::loadNeuronByCode(const std::string& code) {
     }
 
     MYSQL_ROW row = mysql_fetch_row(result);
+    // Возвращаем сырой указатель для обратной совместимости
+    // В новом коде используйте TrinityNeuronPtr
     TrinityNeuron* neuron = new TrinityNeuron(parseNeuronRow(row));
     mysql_free_result(result);
     return neuron;
@@ -101,6 +103,8 @@ TrinityNeuron* TrinityCore::loadNeuronById(int id) {
     }
 
     MYSQL_ROW row = mysql_fetch_row(result);
+    // Возвращаем сырой указатель для обратной совместимости
+    // В новом коде используйте TrinityNeuronPtr
     TrinityNeuron* neuron = new TrinityNeuron(parseNeuronRow(row));
     mysql_free_result(result);
     return neuron;
