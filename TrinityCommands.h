@@ -9,3 +9,4 @@ extern UINT_PTR g_timerId;
 void trinityStart();
 void trinityStop();
 void trinityProcess();
+void TrinityTestShield();
