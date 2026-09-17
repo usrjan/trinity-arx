@@ -14,7 +14,12 @@ void initApp() {
         _T("TSTOP"), _T("TSTOP"),
         ACRX_CMD_MODAL, trinityStop);
 
-    acutPrintf(_T("\n[Trinity] Plugin loaded. TSTART / TSTOP\n"));
+    // Тестовая команда для динамических щитов
+    acedRegCmds->addCommand(_T("TRINITY_COMMANDS"),
+        _T("TEST_SHIELD"), _T("TEST_SHIELD"),
+        ACRX_CMD_MODAL, TrinityTestShield);
+
+    acutPrintf(_T("\n[Trinity] Plugin loaded. Commands: TSTART, TSTOP, TEST_SHIELD\n"));
 }
 
 // ============================================

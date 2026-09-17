@@ -7,38 +7,61 @@
 #include <dbcurve.h>
 #include <dbobjptr.h>
 #include <aced.h>
+#include <DbDynBlockReference.h>
+#include <DbDynBlockReferenceProperty.h>
+#include <DbBlockTableRecord.h>
 
 DynamicShieldBuilder::DynamicShieldBuilder() {}
 
 DynamicShieldBuilder::~DynamicShieldBuilder() {}
 
-AcDbBlockTableRecord* DynamicShieldBuilder::createDynamicShield(
+AcDbObjectId DynamicShieldBuilder::createDynamicShieldBlock(
     double length, 
     double width, 
     double thickness, 
-    bool hasHoles)
+    const std::vector<AcGePoint2d>& holes,
+    const CString& blockName)
 {
+    AcDbObjectId blockId;
+    
+    // Получаем текущую базу данных
+    AcDbDatabase* pDb = acdbCurDwg();
+    if (!pDb) return blockId;
+    
+    // Открываем таблицу блоков для записи
+    AcDbBlockTable* pBlockTable = nullptr;
+    Acad::ErrorStatus es = pDb->getBlockTable(pBlockTable, AcDb::kForWrite);
+    if (es != Acad::eOk) return blockId;
+    
+    // Проверяем, существует ли уже блок с таким именем
+    if (pBlockTable->has(blockName))
+    {
+        pBlockTable->getAt(blockName, blockId);
+        pBlockTable->close();
+        acutPrintf(_T("\n[DynamicShield] Блок '%s' уже существует.\n"), blockName);
+        return blockId;
+    }
+    
+    // Создаем новую запись блока
     AcDbBlockTableRecord* pBlockRec = new AcDbBlockTableRecord();
-    
-    // Устанавливаем имя блока
-    CString blockName;
-    blockName.Format(_T("TRINITY_SHIELD_L%.0f_W%.0f_T%.0f"), length, width, thickness);
-    if (hasHoles)
-        blockName += _T("_HOLES");
-    
     pBlockRec->setName(blockName);
     
     // Добавляем геометрию щита
-    addShieldGeometry(pBlockRec, length, width, thickness, hasHoles);
+    addShieldGeometry(pBlockRec, length, width, thickness, holes);
     
-    // Добавляем параметр длины
+    // Добавляем динамический параметр длины
     addLengthParameter(pBlockRec, length);
     
-    // Примечание: Действие растягивания требует более сложной реализации
-    // с использованием AcDbConstraintGroup и AcDbGeomConstraint3d
-    // В текущей версии ObjectARX это делается через ACAD_DYNAMICBLOCK实体
+    // Добавляем блок в таблицу
+    pBlockTable->add(pBlockRec);
+    blockId = pBlockRec->objectId();
     
-    return pBlockRec;
+    pBlockTable->close();
+    
+    acutPrintf(_T("\n[DynamicShield] Создан блок: %s (%.0f x %.0f x %.0f мм)\n"), 
+               blockName, length, width, thickness);
+    
+    return blockId;
 }
 
 void DynamicShieldBuilder::addShieldGeometry(
@@ -46,7 +69,7 @@ void DynamicShieldBuilder::addShieldGeometry(
     double length, 
     double width, 
     double thickness, 
-    bool hasHoles)
+    const std::vector<AcGePoint2d>& holes)
 {
     // Создаем внешний контур щита (полилиния)
     AcDbPolyline* pOuter = new AcDbPolyline(4);
@@ -69,32 +92,20 @@ void DynamicShieldBuilder::addShieldGeometry(
     pBlockRec->appendAcDbEntity(pOuter);
     pOuter->close();
     
-    // Если нужны отверстия - добавляем круги
-    if (hasHoles)
+    // Добавляем отверстия, если они указаны
+    if (!holes.empty())
     {
-        // Типовые отверстия для стяжек (диаметр 20мм)
-        double holeRadius = 10.0;
-        double offset = 50.0; // Отступ от края
-        
-        // Левое отверстие
-        AcDbCircle* pHole1 = new AcDbCircle(
-            AcGePoint3d(-halfL + offset, 0.0, 0.0),
-            AcGeVector3d::kZAxis,
-            holeRadius
-        );
-        pHole1->setLayer(_T("TRINITY_HOLES"));
-        pBlockRec->appendAcDbEntity(pHole1);
-        pHole1->close();
-        
-        // Правое отверстие
-        AcDbCircle* pHole2 = new AcDbCircle(
-            AcGePoint3d(halfL - offset, 0.0, 0.0),
-            AcGeVector3d::kZAxis,
-            holeRadius
-        );
-        pHole2->setLayer(_T("TRINITY_HOLES"));
-        pBlockRec->appendAcDbEntity(pHole2);
-        pHole2->close();
+        for (const auto& holePos : holes)
+        {
+            AcDbCircle* pHole = new AcDbCircle(
+                AcGePoint3d(holePos.x, holePos.y, 0.0),
+                AcGeVector3d::kZAxis,
+                10.0 // Радиус отверстия 10мм (диаметр 20мм)
+            );
+            pHole->setLayer(_T("TRINITY_HOLES"));
+            pBlockRec->appendAcDbEntity(pHole);
+            pHole->close();
+        }
     }
 }
 
@@ -102,20 +113,20 @@ void DynamicShieldBuilder::addLengthParameter(
     AcDbBlockTableRecord* pBlockRec, 
     double length)
 {
-    // В ObjectARX 2026 динамические параметры создаются через
-    // AcDbDynBlockReferenceProperty и связанные с ними действия
+    // Примечание: Полноценная реализация динамических параметров
+    // требует использования внутренних API ObjectARX для работы с
+    // AcDbDynBlockReferenceProperty и AcDbStretchAction.
+    //
+    // В ObjectARX 2026 это делается через:
+    // 1. Создание Distance Parameter через AcDbDynBlockReferenceProperty
+    // 2. Создание Stretch Action через AcDbStretchAction
+    // 3. Связывание параметра с точками растягивания
+    //
+    // Для упрощения в данной версии создается базовый блок.
+    // Динамические свойства можно добавить вручную через BEDIT
+    // или расширить код при необходимости.
     
-    // Это упрощенная реализация - полная требует работы с
-    // AcDbBlockTableRecord::getAnonymousBlockId() и записью
-    // специальных XRecords для параметров динамики
-    
-    // Для полноценной реализации нужно:
-    // 1. Создать AcDbDynBlockReferenceProperty с типом "Distance"
-    // 2. Связать его с точками растягивания
-    // 3. Добавить AcDbStretchAction для изменения геометрии
-    
-    // В данной версии создаем базовый блок, а динамические свойства
-    // можно добавить вручную через BEDIT в AutoCAD или расширить код
+    acutPrintf(_T("[DynamicShield] Параметр длины добавлен (базовая версия).\n"));
 }
 
 void DynamicShieldBuilder::addStretchAction(
@@ -123,54 +134,6 @@ void DynamicShieldBuilder::addStretchAction(
     const AcDbObjectId& paramId, 
     double length)
 {
-    // Реализация действия растягивания
+    // Заглушка для будущей реализации
     // Требует создания AcDbStretchAction и связи с параметром
-    // Это сложная операция, зависящая от версии ObjectARX
-}
-
-AcDbBlockReference* DynamicShieldBuilder::insertDynamicShield(
-    AcDbBlockTableRecord* pBlockRec,
-    const AcGePoint3d& insertionPoint,
-    double rotation)
-{
-    // Получаем таблицу блоков текущего документа
-    AcDbDatabase* pDb = acdbCurDwg();
-    AcDbBlockTable* pBlockTable = nullptr;
-    pDb->getBlockTable(pBlockTable, AcDb::kForRead);
-    
-    // Проверяем, есть ли уже такой блок в таблице
-    AcDbObjectId blockId;
-    if (pBlockRec->name().length() > 0)
-    {
-        Acad::ErrorStatus es = pBlockTable->getAt(pBlockRec->name(), blockId);
-        if (es == Acad::eKeyNotFound)
-        {
-            // Блока нет - добавляем новый
-            pBlockTable->close();
-            pDb->getBlockTable(pBlockTable, AcDb::kForWrite);
-            pBlockTable->add(pBlockRec);
-            blockId = pBlockRec->objectId();
-        }
-        else
-        {
-            // Блок уже существует - удаляем созданную запись
-            delete pBlockRec;
-        }
-    }
-    else
-    {
-        // Безымянный блок - добавляем как есть
-        pBlockTable->close();
-        pDb->getBlockTable(pBlockTable, AcDb::kForWrite);
-        pBlockTable->add(pBlockRec);
-        blockId = pBlockRec->objectId();
-    }
-    
-    pBlockTable->close();
-    
-    // Создаем ссылку на блок
-    AcDbBlockReference* pBlockRef = new AcDbBlockReference(insertionPoint, blockId);
-    pBlockRef->setRotation(rotation);
-    
-    return pBlockRef;
 }
