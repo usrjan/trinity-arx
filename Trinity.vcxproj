@@ -92,6 +92,7 @@
     <ClCompile Include="TrinityCommands.cpp" />
     <ClCompile Include="TrinityConfig.cpp" />
     <ClCompile Include="TrinityCore.cpp" />
+    <ClCompile Include="DataCache.cpp" />
     <ClCompile Include="TrinityFileManager.cpp" />
     <ClCompile Include="TrinityGeometryBuilder.cpp" />
     <ClCompile Include="TrinityLayerManager.cpp" />
@@ -102,6 +103,7 @@
     <ClInclude Include="TrinityCommands.h" />
     <ClInclude Include="TrinityConfig.h" />
     <ClInclude Include="TrinityCore.h" />
+    <ClInclude Include="DataCache.h" />
     <ClInclude Include="TrinityFileManager.h" />
     <ClInclude Include="TrinityGeometryBuilder.h" />
     <ClInclude Include="TrinityLayerManager.h" />
