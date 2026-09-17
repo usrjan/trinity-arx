@@ -301,3 +301,89 @@ TrinityRotationCompound TrinityCore::parseRotation(const std::string& json) {
 
     return compound;
 }
+
+// ============================================
+// МАССОВАЯ ЗАГРУЗКА УЗЛОВ ПРОЕКТА
+// ============================================
+// Устранение N+1 проблемы: загружаем все узлы проекта одним запросом
+std::vector<TrinityNeuron> TrinityCore::loadAllNodesForProject(int projectId) {
+    std::vector<TrinityNeuron> nodes;
+    
+    if (!m_connected) return nodes;
+
+    char query[512];
+    snprintf(query, sizeof(query),
+        "SELECT id, code, type, category, material, status, "
+        "width, height, thickness, process_code, json_data "
+        "FROM neurons "
+        "WHERE project_id = %d OR id IN ("
+        "  SELECT child_id FROM synapses WHERE parent_id IN ("
+        "    SELECT id FROM neurons WHERE project_id = %d"
+        ")"
+        ") "
+        "ORDER BY id",
+        projectId, projectId);
+
+    if (mysql_query(m_mysql, query)) {
+        acutPrintf(_T("\n[TrinityCore] Error loading nodes for project %d: %hs\n"), 
+                   projectId, mysql_error(m_mysql));
+        return nodes;
+    }
+
+    MYSQL_RES* result = mysql_store_result(m_mysql);
+    if (!result) return nodes;
+
+    MYSQL_ROW row;
+    while ((row = mysql_fetch_row(result))) {
+        nodes.push_back(parseNeuronRow(row));
+    }
+
+    mysql_free_result(result);
+    
+    wchar_t msg[256];
+    swprintf(msg, _T("\n[TrinityCore] Loaded %d nodes for project %d"), 
+             static_cast<int>(nodes.size()), projectId);
+    acutPrintf(msg);
+
+    return nodes;
+}
+
+// ============================================
+// МАССОВАЯ ЗАГРУЗКА ВСЕХ ДЕТАЛЕЙ
+// ============================================
+// Устранение N+1 проблемы: загружаем все детали одним запросом
+std::vector<TrinityNeuron> TrinityCore::loadAllDetails() {
+    std::vector<TrinityNeuron> details;
+    
+    if (!m_connected) return details;
+
+    const char* query = 
+        "SELECT id, code, type, category, material, status, "
+        "width, height, thickness, process_code, json_data "
+        "FROM neurons "
+        "WHERE type = 'detail' "
+        "ORDER BY id";
+
+    if (mysql_query(m_mysql, query)) {
+        acutPrintf(_T("\n[TrinityCore] Error loading all details: %hs\n"), 
+                   mysql_error(m_mysql));
+        return details;
+    }
+
+    MYSQL_RES* result = mysql_store_result(m_mysql);
+    if (!result) return details;
+
+    MYSQL_ROW row;
+    while ((row = mysql_fetch_row(result))) {
+        details.push_back(parseNeuronRow(row));
+    }
+
+    mysql_free_result(result);
+    
+    wchar_t msg[256];
+    swprintf(msg, _T("\n[TrinityCore] Loaded %d details"), 
+             static_cast<int>(details.size()));
+    acutPrintf(msg);
+
+    return details;
+}

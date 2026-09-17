@@ -459,6 +459,11 @@ int TrinityBuildEngine::processAllProjects(AcDbDatabase* targetDb) {
     acutPrintf(_T("\n[BuildEngine] Processing %d projects...\n"),
         static_cast<int>(projects.size()));
 
+    // Предварительная загрузка данных в кэш для устранения N+1 проблемы
+    for (auto& proj : projects) {
+        initializeCache(proj.id);
+    }
+
     for (auto& proj : projects) {
         // Создаём файл проекта (рекурсивно)
         std::string actualPath = ensureFileExists(proj.code, 0);
@@ -479,4 +484,65 @@ int TrinityBuildEngine::processAllProjects(AcDbDatabase* targetDb) {
     }
 
     return static_cast<int>(projects.size());
+}
+
+// ============================================================
+// ИНИЦИАЛИЗАЦИЯ КЭША ДЛЯ ПРОЕКТА
+// ============================================================
+void TrinityBuildEngine::initializeCache(int projectId) {
+    acutPrintf(_T("\n[BuildEngine] Initializing cache for project %d...\n"), projectId);
+
+    // Загружаем все узлы проекта одним запросом
+    auto nodes = m_core.loadAllNodesForProject(projectId);
+    
+    std::vector<NodeData> nodeDataList;
+    for (const auto& neuron : nodes) {
+        NodeData nd;
+        nd.id = neuron.id;
+        nd.projectId = projectId;
+        nd.name = neuron.code;
+        nd.type = neuron.type;
+        nd.x = nd.y = nd.z = 0; // Позиция будет получена из синапсов
+        nd.rotX = nd.rotY = nd.rotZ = 0;
+        
+        // Загружаем детей для этого узла
+        auto children = m_core.loadChildren(neuron.id);
+        for (const auto& child : children) {
+            nd.childNodeIds.push_back(child.childId);
+        }
+        
+        // Если это деталь, добавляем partIds
+        if (neuron.type == "detail") {
+            nd.partIds.push_back(neuron.id);
+        }
+        
+        nodeDataList.push_back(nd);
+    }
+    
+    DataCache::Instance().AddNodes(nodeDataList);
+    
+    // Загружаем все детали проекта
+    auto details = m_core.loadAllDetails();
+    
+    std::vector<PartData> partDataList;
+    for (const auto& detail : details) {
+        PartData pd;
+        pd.id = detail.id;
+        pd.nodeId = detail.id;
+        pd.name = detail.code;
+        pd.profileType = detail.category;
+        pd.length = detail.width;
+        pd.width = detail.height;
+        pd.height = detail.thickness;
+        pd.material = detail.material;
+        pd.layerId = 0; // Будет определён позже
+        
+        partDataList.push_back(pd);
+    }
+    
+    DataCache::Instance().AddParts(partDataList);
+    
+    acutPrintf(_T("\n[BuildEngine] Cache initialized: %d nodes, %d parts\n"), 
+               static_cast<int>(nodeDataList.size()), 
+               static_cast<int>(partDataList.size()));
 }

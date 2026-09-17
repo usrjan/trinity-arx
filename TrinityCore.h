@@ -93,4 +93,8 @@ public:
     static TrinitySynapse parseSynapseRow(MYSQL_ROW row);
     static TrinityPosition parsePosition(const std::string& json);
     static TrinityRotationCompound parseRotation(const std::string& json);
+
+    // Массовая загрузка для кэширования (устранение N+1 проблемы)
+    std::vector<TrinityNeuron> loadAllNodesForProject(int projectId);
+    std::vector<TrinityNeuron> loadAllDetails();
 };
