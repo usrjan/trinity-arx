@@ -611,7 +611,14 @@ INSERT INTO synapse (parent, child, data) VALUES
 (@assy_id, @panel_425_850, JSON_OBJECT('pos', JSON_ARRAY(10, 30, 850),
     'rot', JSON_ARRAY(1, 0, 0, 90))),
 (@assy_id, @panel_425_850, JSON_OBJECT('pos', JSON_ARRAY(10, 30, 1700),
-    'rot', JSON_ARRAY(1, 0, 0, 90)));
+    'rot', JSON_ARRAY(1, 0, 0, 90))),
+
+(@assy_id, @panel_425_850, JSON_OBJECT('pos', JSON_ARRAY(10, 395, 850),
+    'rot', JSON_ARRAY(1, 0, 0, -90))),
+(@assy_id, @panel_425_850, JSON_OBJECT('pos', JSON_ARRAY(10, 395, 1700),
+    'rot', JSON_ARRAY(1, 0, 0, -90))),
+(@assy_id, @panel_425_850, JSON_OBJECT('pos', JSON_ARRAY(10, 395, 2550),
+    'rot', JSON_ARRAY(1, 0, 0, -90)));
 
 -- ============================================
 -- ПРОЕКТ: PROJ-TEST-001
@@ -626,38 +633,9 @@ INSERT INTO neuron (pid, type, data) VALUES
 ));
 SET @project_id = LAST_INSERT_ID();
 
--- Конструкция C.S.0.3.425.850 (0, 0, 0)
+-- Объёмная конструкция C.S.0.3.425.850.ASSY (0, 0, 0)
 INSERT INTO synapse (parent, child, data) 
-SELECT @project_id, id, JSON_OBJECT('pos', JSON_ARRAY(0, 0, 0), 'rot', JSON_ARRAY(0, 0, 0, 0))
-FROM neuron WHERE JSON_UNQUOTE(JSON_EXTRACT(data, '$.code')) = 'C.S.0.3.425.850';
-
--- Конструкция C.S.0.3.425.425 (900, 0, 0)
-INSERT INTO synapse (parent, child, data) 
-SELECT @project_id, id, JSON_OBJECT('pos', JSON_ARRAY(900, 0, 0), 'rot', JSON_ARRAY(0, 0, 0, 0))
-FROM neuron WHERE JSON_UNQUOTE(JSON_EXTRACT(data, '$.code')) = 'C.S.0.3.425.425';
-
--- Конструкция C.S.0.3.850.850 (1800, 0, 0)
-INSERT INTO synapse (parent, child, data) 
-SELECT @project_id, id, JSON_OBJECT('pos', JSON_ARRAY(1800, 0, 0), 'rot', JSON_ARRAY(0, 0, 0, 0))
-FROM neuron WHERE JSON_UNQUOTE(JSON_EXTRACT(data, '$.code')) = 'C.S.0.3.850.850';
-
--- Объёмная конструкция C.S.0.3.425.850.ASSY (3000, 0, 0)
-INSERT INTO synapse (parent, child, data) 
-VALUES (@project_id, @assy_id, JSON_OBJECT('pos', JSON_ARRAY(3000, 0, 0), 'rot', JSON_ARRAY(0, 0, 0, 0)));
-
--- ============================================
--- БОКОВЫЕ СТЕНКИ В ПРОЕКТ
--- ============================================
-
-SET @project_id = (SELECT MIN(id) FROM neuron WHERE JSON_UNQUOTE(JSON_EXTRACT(data, '$.code')) = 'PROJ-TEST-001');
-SET @sw_425 = (SELECT MIN(id) FROM neuron WHERE JSON_UNQUOTE(JSON_EXTRACT(data, '$.code')) = 'D.S.2.425.425.10');
-SET @sw_850 = (SELECT MIN(id) FROM neuron WHERE JSON_UNQUOTE(JSON_EXTRACT(data, '$.code')) = 'D.S.2.425.850.10');
-
-INSERT INTO synapse (parent, child, data) VALUES
-(@project_id, @sw_425, JSON_OBJECT('pos', JSON_ARRAY(-15, 0, 0),   'rot', JSON_ARRAY(0, 0, 0, 0))),
-(@project_id, @sw_425, JSON_OBJECT('pos', JSON_ARRAY(425, 0, 0),   'rot', JSON_ARRAY(0, 0, 0, 0))),
-(@project_id, @sw_850, JSON_OBJECT('pos', JSON_ARRAY(-15, 900, 0), 'rot', JSON_ARRAY(0, 0, 0, 0))),
-(@project_id, @sw_850, JSON_OBJECT('pos', JSON_ARRAY(425, 900, 0), 'rot', JSON_ARRAY(0, 0, 0, 0)));
+VALUES (@project_id, @assy_id, JSON_OBJECT('pos', JSON_ARRAY(0, 0, 0), 'rot', JSON_ARRAY(0, 0, 0, 0)));
 
 -- ============================================
 -- СБРОС СТАТУСА ПРОЕКТА
@@ -667,31 +645,3 @@ UPDATE neuron
 SET data = JSON_SET(data, '$.status', 'pending')
 WHERE JSON_UNQUOTE(JSON_EXTRACT(data, '$.code')) = 'PROJ-TEST-001';
 
--- ============================================
--- ПРОВЕРКА
--- ============================================
-
-SELECT 
-    'DETAILS' AS section,
-    JSON_UNQUOTE(JSON_EXTRACT(data, '$.code')) AS code,
-    JSON_UNQUOTE(JSON_EXTRACT(data, '$.category')) AS category,
-    JSON_UNQUOTE(JSON_EXTRACT(data, '$.material')) AS material,
-    IF(JSON_EXTRACT(data, '$.holes') IS NOT NULL, 'YES', '-') AS has_holes
-FROM neuron
-WHERE type = 'detail'
-ORDER BY sort, id;
-
-SELECT 
-    'CONSTRUCTIONS' AS section,
-    JSON_UNQUOTE(JSON_EXTRACT(data, '$.code')) AS code,
-    JSON_UNQUOTE(JSON_EXTRACT(data, '$.category')) AS category
-FROM neuron
-WHERE type = 'construction'
-ORDER BY id;
-
-SELECT 
-    'PROJECT' AS section,
-    JSON_UNQUOTE(JSON_EXTRACT(data, '$.code')) AS code,
-    JSON_UNQUOTE(JSON_EXTRACT(data, '$.status')) AS status
-FROM neuron
-WHERE type = 'project';
