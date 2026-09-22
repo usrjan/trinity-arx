@@ -1,17 +1,11 @@
 #pragma once
 
 #include "StdAfx.h"
-#include <dbdict.h>
-#include <dbxrecord.h>
 #include <geassign.h>
 #include <acdbcurv.h>
 #include <dblayer.h>
 #include <aced.h>
 #include <rxobject.h>
-#include <dbdynblk.h>
-#include <DbBlockTableRecord.h>
-#include <DbDynBlockReferenceProperty.h>
-#include <DbDynBlockReference.h>
 #include <vector>
 
 /// <summary>
