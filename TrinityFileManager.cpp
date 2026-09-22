@@ -67,29 +67,27 @@ AcDbObjectId TrinityFileManager::attachXref(
             if (es == Acad::eOk && pBlockRec) {
                 // Если это XREF — проверяем, существует ли файл
                 if (pBlockRec->isFromExternalReference()) {
-                    AcDbObjectId xrefId = pBlockRec->externalReferenceId();
-                    if (xrefId.isValid()) {
-                        // Файл удалён — нужно перегрузить XREF
-                        // Помечаем для перезагрузки
+                    // Получаем путь к внешнему файлу
+                    const wchar_t* xrefPath = pBlockRec->pathName();
+                    bool fileExists = (xrefPath && _waccess(xrefPath, 0) == 0);
+                    
+                    if (!fileExists) {
+                        // Файл удалён — нужно удалить старый блок и вставить заново
                         pBlockRec->close();
                         pBlockTable->upgradeOpen();
                         
                         // Удаляем старый блок из таблицы
                         AcDbObjectId oldBlockId;
                         pBlockTable->getAt(nameW, oldBlockId);
-                        pBlockTable->close();
                         
                         // Открываем для записи и удаляем
-                        AcDbBlockTable* pBtWrite = nullptr;
-                        targetDb->getSymbolTable(pBtWrite, AcDb::kForWrite);
                         AcDbBlockTableRecord* pOldRec = nullptr;
-                        pBtWrite->getAt(nameW, pOldRec, AcDb::kForWrite);
-                        
-                        if (pOldRec) {
+                        es = pBlockTable->getAt(nameW, pOldRec, AcDb::kForWrite);
+                        if (es == Acad::eOk && pOldRec) {
                             pOldRec->erase();
-                            pOldRec = nullptr;
+                            pOldRec->close();
                         }
-                        pBtWrite->close();
+                        pBlockTable->close();
                         
                         // Теперь блока нет — будем вставлять заново
                         blockId = AcDbObjectId::kNull;
