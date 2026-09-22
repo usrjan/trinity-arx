@@ -1,67 +1,61 @@
 // DataCache.cpp
 #include "StdAfx.h"
 #include "DataCache.h"
-#include "TrinityCore.h"
 
-DataCache* DataCache::m_instance = nullptr;
-
-DataCache* DataCache::getInstance()
+DataCache& DataCache::Instance()
 {
-    if (!m_instance)
-        m_instance = new DataCache();
-    return m_instance;
+    static DataCache instance;
+    return instance;
 }
 
-void DataCache::destroyInstance()
+void DataCache::Clear()
 {
-    delete m_instance;
-    m_instance = nullptr;
+    projects_.clear();
+    nodes_.clear();
+    parts_.clear();
 }
 
-void DataCache::clear()
+void DataCache::AddProject(const ProjectData& proj)
 {
-    m_nodes.clear();
-    m_parts.clear();
+    projects_[proj.id] = proj;
 }
 
-void DataCache::addNode(const NodeData& node)
+const ProjectData* DataCache::GetProject(int id) const
 {
-    m_nodes[node.nodeId] = node;
+    auto it = projects_.find(id);
+    if (it != projects_.end())
+        return &it->second;
+    return nullptr;
 }
 
-void DataCache::addPart(const PartData& part)
+void DataCache::AddNodes(const std::vector<NodeData>& nodes)
 {
-    m_parts[part.partId] = part;
-}
-
-bool DataCache::getNode(int nodeId, NodeData& outNode) const
-{
-    auto it = m_nodes.find(nodeId);
-    if (it != m_nodes.end())
+    for (const auto& node : nodes)
     {
-        outNode = it->second;
-        return true;
+        nodes_[node.id] = node;
     }
-    return false;
 }
 
-bool DataCache::getPart(int partId, PartData& outPart) const
+const NodeData* DataCache::GetNode(int id) const
 {
-    auto it = m_parts.find(partId);
-    if (it != m_parts.end())
+    auto it = nodes_.find(id);
+    if (it != nodes_.end())
+        return &it->second;
+    return nullptr;
+}
+
+void DataCache::AddParts(const std::vector<PartData>& parts)
+{
+    for (const auto& part : parts)
     {
-        outPart = it->second;
-        return true;
+        parts_[part.id] = part;
     }
-    return false;
 }
 
-size_t DataCache::getNodeCount() const
+const PartData* DataCache::GetPart(int id) const
 {
-    return m_nodes.size();
-}
-
-size_t DataCache::getPartCount() const
-{
-    return m_parts.size();
+    auto it = parts_.find(id);
+    if (it != parts_.end())
+        return &it->second;
+    return nullptr;
 }

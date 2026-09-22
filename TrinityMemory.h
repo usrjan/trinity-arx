@@ -32,18 +32,9 @@ public:
         other.m_ptr = nullptr;
     }
     
-    TrinityNeuronPtr& operator=(TrinityNeuronPtr&& other) noexcept {
-        if (this != &other) {
-            delete m_ptr;
-            m_ptr = other.m_ptr;
-            other.m_ptr = nullptr;
-        }
-        return *this;
-    }
+    TrinityNeuronPtr& operator=(TrinityNeuronPtr&& other) noexcept;
     
-    ~TrinityNeuronPtr() {
-        delete m_ptr;
-    }
+    ~TrinityNeuronPtr();
     
     // Операторы доступа
     TrinityNeuron* get() const { return m_ptr; }
@@ -59,10 +50,7 @@ public:
     }
     
     // Сброс и замена
-    void reset(TrinityNeuron* ptr = nullptr) {
-        delete m_ptr;
-        m_ptr = ptr;
-    }
+    void reset(TrinityNeuron* ptr = nullptr);
 };
 
 // ============================================================

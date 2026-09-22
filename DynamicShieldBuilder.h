@@ -2,7 +2,7 @@
 
 #include "StdAfx.h"
 #include <dbdict.h>
-#include <dbxrecard.h>
+#include <dbxrecord.h>
 #include <geassign.h>
 #include <acdbcurv.h>
 #include <dblayer.h>
