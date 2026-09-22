@@ -54,24 +54,75 @@ AcDbObjectId TrinityFileManager::attachXref(
     }
 
     AcDbObjectId blockId = AcDbObjectId::kNull;
+    bool wasInserted = false;
 
-    // Шаг 1: есть ли блок уже?
+    // Шаг 1: Проверяем, есть ли блок уже в таблице
     AcDbBlockTable* pBlockTable = nullptr;
     Acad::ErrorStatus es = targetDb->getSymbolTable(pBlockTable, AcDb::kForRead);
     if (es == Acad::eOk) {
         if (pBlockTable->has(nameW)) {
-            pBlockTable->getAt(nameW, blockId);
+            // Блок существует — проверяем, валиден ли его путь
+            AcDbBlockTableRecord* pBlockRec = nullptr;
+            es = pBlockTable->getAt(nameW, pBlockRec, AcDb::kForRead);
+            if (es == Acad::eOk && pBlockRec) {
+                // Если это XREF — проверяем, существует ли файл
+                if (pBlockRec->isFromExternalReference()) {
+                    AcDbObjectId xrefId = pBlockRec->externalReferenceId();
+                    if (xrefId.isValid()) {
+                        // Файл удалён — нужно перегрузить XREF
+                        // Помечаем для перезагрузки
+                        pBlockRec->close();
+                        pBlockTable->upgradeOpen();
+                        
+                        // Удаляем старый блок из таблицы
+                        AcDbObjectId oldBlockId;
+                        pBlockTable->getAt(nameW, oldBlockId);
+                        pBlockTable->close();
+                        
+                        // Открываем для записи и удаляем
+                        AcDbBlockTable* pBtWrite = nullptr;
+                        targetDb->getSymbolTable(pBtWrite, AcDb::kForWrite);
+                        AcDbBlockTableRecord* pOldRec = nullptr;
+                        pBtWrite->getAt(nameW, pOldRec, AcDb::kForWrite);
+                        
+                        if (pOldRec) {
+                            pOldRec->erase();
+                            pOldRec = nullptr;
+                        }
+                        pBtWrite->close();
+                        
+                        // Теперь блока нет — будем вставлять заново
+                        blockId = AcDbObjectId::kNull;
+                        wasInserted = false;
+                    } else {
+                        pBlockRec->close();
+                        pBlockTable->getAt(nameW, blockId);
+                        pBlockTable->close();
+                        wasInserted = true;
+                    }
+                } else {
+                    pBlockRec->close();
+                    pBlockTable->getAt(nameW, blockId);
+                    pBlockTable->close();
+                    wasInserted = true;
+                }
+            } else {
+                if (pBlockRec) pBlockRec->close();
+                pBlockTable->close();
+            }
+        } else {
+            pBlockTable->close();
         }
-        pBlockTable->close();
     }
 
-    // Шаг 2: если блока нет — читаем файл и вставляем
+    // Шаг 2: Если блока нет — читаем файл и вставляем
     if (blockId == AcDbObjectId::kNull) {
         AcDbDatabase* pXrefDb = new AcDbDatabase(Adesk::kTrue, Adesk::kTrue);
         es = pXrefDb->readDwgFile(pathW);
 
         if (es == Acad::eOk) {
             es = targetDb->insert(blockId, nameW, pXrefDb, true);
+            wasInserted = (es == Acad::eOk);
         }
         delete pXrefDb;
 
@@ -82,17 +133,13 @@ AcDbObjectId TrinityFileManager::attachXref(
             targetDb->getSymbolTable(pBt, AcDb::kForRead);
             if (pBt->has(nameW)) {
                 pBt->getAt(nameW, blockId);
-                //acutPrintf(_T("\n[FileManager] Block exists (dup), using it\n"));
             }
             pBt->close();
+            wasInserted = true;
         }
         else if (es != Acad::eOk) {
-            // Любая другая ошибка — выходим
             acutPrintf(_T("\n[FileManager] Insert failed (error %d)\n"), es);
             return AcDbObjectId::kNull;
-        }
-        else {
-            //acutPrintf(_T("\n[FileManager] XREF inserted: %s\n"), nameW);
         }
     }
 
@@ -101,14 +148,29 @@ AcDbObjectId TrinityFileManager::attachXref(
         return AcDbObjectId::kNull;
     }
 
-    // Шаг 4: добавляем BlockReference в Model Space
+    // Шаг 4: Добавляем BlockReference в Model Space
     AcDbBlockTable* pBt = nullptr;
-    targetDb->getSymbolTable(pBt, AcDb::kForRead);
+    es = targetDb->getSymbolTable(pBt, AcDb::kForRead);
+    if (es != Acad::eOk) {
+        acutPrintf(_T("\n[FileManager] Cannot open BlockTable (error %d)\n"), es);
+        return AcDbObjectId::kNull;
+    }
+    
     AcDbBlockTableRecord* pMs = nullptr;
-    pBt->getAt(ACDB_MODEL_SPACE, pMs, AcDb::kForWrite);
+    es = pBt->getAt(ACDB_MODEL_SPACE, pMs, AcDb::kForWrite);
     pBt->close();
+    
+    if (es != Acad::eOk || !pMs) {
+        acutPrintf(_T("\n[FileManager] Cannot open ModelSpace (error %d)\n"), es);
+        if (pMs) pMs->close();
+        return AcDbObjectId::kNull;
+    }
 
     AcDbBlockReference* pRef = new AcDbBlockReference(pos, blockId);
+    if (!pRef) {
+        pMs->close();
+        return AcDbObjectId::kNull;
+    }
 
     if (rot.count > 0) {
         AcGeMatrix3d mat;
@@ -129,10 +191,16 @@ AcDbObjectId TrinityFileManager::attachXref(
     }
 
     AcDbObjectId refId;
-    pMs->appendAcDbEntity(refId, pRef);
+    es = pMs->appendAcDbEntity(refId, pRef);
+    
+    // Всегда закрываем pRef, независимо от результата
     pRef->close();
     pMs->close();
 
-    //acutPrintf(_T("\n[FileManager] XREF placed: %s\n"), nameW);
+    if (es != Acad::eOk) {
+        acutPrintf(_T("\n[FileManager] Failed to append BlockReference (error %d)\n"), es);
+        return AcDbObjectId::kNull;
+    }
+
     return refId;
 }

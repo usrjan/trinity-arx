@@ -16,20 +16,26 @@ void CALLBACK TimerProc(HWND, UINT, UINT_PTR, DWORD) {
 // TRINITY_START — запуск таймера
 // ============================================
 void trinityStart() {
+    // Если таймер уже запущен — сначала останавливаем его
     if (g_timerId != 0) {
-        acutPrintf(_T("\n[Trinity] Timer already running\n"));
-        return;
+        acutPrintf(_T("\n[Trinity] Timer already running. Restarting...\n"));
+        trinityStop();
     }
 
-    if (!g_engine) {
-        g_engine = new TrinityBuildEngine("D:\\trinity");
+    // Очищаем глобальный указатель на движок
+    if (g_engine) {
+        delete g_engine;
+        g_engine = nullptr;
+    }
 
-        if (!g_engine->init("10.250.11.112", "webdev", "1QAZxsw2", "trinity_core")) {
-            acutPrintf(_T("\n[Trinity] Failed to connect to database\n"));
-            delete g_engine;
-            g_engine = nullptr;
-            return;
-        }
+    // Создаём новый движок
+    g_engine = new TrinityBuildEngine("D:\\trinity");
+
+    if (!g_engine->init("10.250.11.112", "webdev", "1QAZxsw2", "trinity_core")) {
+        acutPrintf(_T("\n[Trinity] Failed to connect to database\n"));
+        delete g_engine;
+        g_engine = nullptr;
+        return;
     }
 
     g_timerId = SetTimer(NULL, NULL, 5000, TimerProc);
@@ -41,14 +47,13 @@ void trinityStart() {
 // TRINITY_STOP — остановка
 // ============================================
 void trinityStop() {
-    if (g_timerId == 0) {
-        acutPrintf(_T("\n[Trinity] Timer not running\n"));
-        return;
+    // Сначала останавливаем таймер
+    if (g_timerId != 0) {
+        KillTimer(NULL, g_timerId);
+        g_timerId = 0;
     }
 
-    KillTimer(NULL, g_timerId);
-    g_timerId = 0;
-
+    // Очищаем движок
     if (g_engine) {
         g_engine->shutdown();
         delete g_engine;
