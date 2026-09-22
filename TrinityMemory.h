@@ -3,9 +3,9 @@
 #pragma once
 #include "StdAfx.h"
 
-// Предварительное объявление класса TrinityNeuron
+// Предварительное объявление структуры TrinityNeuron
 // (полное определение будет в TrinityCore.h)
-class TrinityNeuron;
+struct TrinityNeuron;
 
 // ============================================================
 // УМНЫЙ УКАЗАТЕЛЬ ДЛЯ TrinityNeuron
