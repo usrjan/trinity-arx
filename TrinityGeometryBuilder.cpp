@@ -2,7 +2,6 @@
 #include "StdAfx.h"
 #include "TrinityGeometryBuilder.h"
 #include "TrinityLayerManager.h"
-#include "TrinityMemory.h"
 
 // ============================================
 // ДИСПЕТЧЕР
@@ -20,7 +19,7 @@ AcDb3dSolid* TrinityGeometryBuilder::build(const TrinityNeuron& detail) {
 // ЩИТ (прямоугольник)
 // ============================================
 AcDb3dSolid* TrinityGeometryBuilder::buildBox(const TrinityNeuron& d) {
-    SolidPtr solid(new AcDb3dSolid());
+    AcDb3dSolid* solid = new AcDb3dSolid();
     solid->createBox(d.width, d.height, d.thickness);
 
     AcGeMatrix3d mat;
@@ -33,7 +32,7 @@ AcDb3dSolid* TrinityGeometryBuilder::buildBox(const TrinityNeuron& d) {
     MultiByteToWideChar(CP_UTF8, 0, layer.c_str(), -1, layerW, 256);
     solid->setLayer(layerW);
 
-    return solid.release();
+    return solid;
 }
 
 // ============================================
@@ -110,7 +109,7 @@ AcDb3dSolid* TrinityGeometryBuilder::buildRib(const TrinityNeuron& d) {
     // --------------------------------------------------
     // ПОЛИЛИНИЯ КОНТУРА (12 точек)
     // --------------------------------------------------
-    PolylinePtr pPoly(new AcDbPolyline(12));
+    AcDbPolyline* pPoly = new AcDbPolyline(12);
 
     pPoly->addVertexAt(0, AcGePoint2d(0.0, W), 0, 0, 0);
     pPoly->addVertexAt(1, AcGePoint2d(centerY - 4.0, W), 0, 0, 0);
@@ -148,32 +147,25 @@ AcDb3dSolid* TrinityGeometryBuilder::buildRib(const TrinityNeuron& d) {
     assert(regions.length() == 1);
     AcDbRegion* pRegion = AcDbRegion::cast((AcRxObject*)regions[0]);
     assert(pRegion != NULL);
-    
-    // Освобождаем полилинию через RAII
-    pPoly.reset(nullptr);
+    pPoly->erase();
+    pPoly->close();
 
-    SolidPtr solid(new AcDb3dSolid());
+    AcDb3dSolid* solid = new AcDb3dSolid();
     solid->extrude(pRegion, T, 0.0);
 
-    // Очистка массивов через RAII-подобный подход
-    for (int i = 0; i < lines.length(); i++) {
-        if (lines[i]) delete static_cast<AcRxObject*>(lines[i]);
-    }
-    for (int i = 0; i < regions.length(); i++) {
-        if (regions[i] && regions[i] != pRegion) delete static_cast<AcRxObject*>(regions[i]);
-    }
-    if (pRegion) delete pRegion;
+    for (int i = 0; i < lines.length(); i++) delete (AcRxObject*)lines[i];
+    for (int i = 0; i < regions.length(); i++) delete (AcRxObject*)regions[i];
 
     solid->setLayer(layerName);
 
-    return solid.release();
+    return solid;
 }
 
 // ============================================
 // ЭКСТРУЗИЯ ПРОФИЛЯ (фолбэк, если нужен)
 // ============================================
 AcDb3dSolid* TrinityGeometryBuilder::extrudeProfile(const AcGePoint3dArray& pts, double height) {
-    PolylinePtr pPoly(new AcDbPolyline());
+    AcDbPolyline* pPoly = new AcDbPolyline();
     for (int i = 0; i < pts.length(); i++) pPoly->addVertexAt(i, AcGePoint2d(pts[i].x, pts[i].y));
     pPoly->setClosed(true);
 
@@ -181,23 +173,16 @@ AcDb3dSolid* TrinityGeometryBuilder::extrudeProfile(const AcGePoint3dArray& pts,
     pPoly->explode(lines);
     AcDbRegion::createFromCurves(lines, regions);
     AcDbRegion* pRegion = AcDbRegion::cast((AcRxObject*)regions[0]);
-    
-    // Освобождаем через RAII
-    pPoly.reset(nullptr);
+    pPoly->erase();
+    pPoly->close();
 
-    SolidPtr solid(new AcDb3dSolid());
+    AcDb3dSolid* solid = new AcDb3dSolid();
     solid->extrude(pRegion, height, 0.0);
 
-    // Очистка массивов
-    for (int i = 0; i < lines.length(); i++) {
-        if (lines[i]) delete static_cast<AcRxObject*>(lines[i]);
-    }
-    for (int i = 0; i < regions.length(); i++) {
-        if (regions[i] && regions[i] != pRegion) delete static_cast<AcRxObject*>(regions[i]);
-    }
-    if (pRegion) delete pRegion;
+    for (int i = 0; i < lines.length(); i++) delete (AcRxObject*)lines[i];
+    for (int i = 0; i < regions.length(); i++) delete (AcRxObject*)regions[i];
 
-    return solid.release();
+    return solid;
 }
 
 // ============================================
@@ -220,14 +205,14 @@ void TrinityGeometryBuilder::drawBoltMarkers(const TrinityNeuron& d,
     double boltRadius = 3.0;
     auto positions = getBoltPositions(d);
     for (const auto& pos : positions) {
-        CirclePtr pCircle(new AcDbCircle());
+        AcDbCircle* pCircle = new AcDbCircle();
         pCircle->setCenter(pos);
         pCircle->setRadius(boltRadius);
         pCircle->setNormal(AcGeVector3d(1, 0, 0));  // плоскость YZ
         pCircle->setLayer(_T("_bolt"));
 
         AcDbObjectId circleId;
-        pMs->appendAcDbEntity(circleId, pCircle.get());
+        pMs->appendAcDbEntity(circleId, pCircle);
         pCircle->close();
         ids.append(circleId);
     }

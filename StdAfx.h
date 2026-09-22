@@ -32,12 +32,6 @@
 #include <dbsymtb.h>
 #include <dbgroup.h>
 #include <dbapserv.h>
-#include <dbdict.h>
-#include <dbxrecord.h>
-#include <dbdynblk.h>
-#include <DbBlockTableRecord.h>
-#include <DbDynBlockReferenceProperty.h>
-#include <DbDynBlockReference.h>
 
 // ============================================
 // AutoCAD — 3D

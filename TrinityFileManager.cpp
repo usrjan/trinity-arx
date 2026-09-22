@@ -1,7 +1,6 @@
 // TrinityFileManager.cpp
 #include "StdAfx.h"
 #include "TrinityFileManager.h"
-#include "TrinityMemory.h"
 #include <direct.h>
 #include <io.h>
 
@@ -31,7 +30,7 @@ bool TrinityFileManager::saveDwg(AcDbDatabase* db, const std::string& path) {
 
     Acad::ErrorStatus es = db->saveAs(pathW);
     if (es == Acad::eOk) {
-        acutPrintf(_T("\n[FileManager] Saved: %s\n"), pathW);
+        //acutPrintf(_T("\n[FileManager] Saved: %s\n"), pathW);
         return true;
     }
     acutPrintf(_T("\n[FileManager] Save failed: %s (error %d)\n"), pathW, es);
@@ -68,13 +67,13 @@ AcDbObjectId TrinityFileManager::attachXref(
 
     // Шаг 2: если блока нет — читаем файл и вставляем
     if (blockId == AcDbObjectId::kNull) {
-        DatabasePtr pXrefDb(new AcDbDatabase(Adesk::kTrue, Adesk::kTrue));
+        AcDbDatabase* pXrefDb = new AcDbDatabase(Adesk::kTrue, Adesk::kTrue);
         es = pXrefDb->readDwgFile(pathW);
 
         if (es == Acad::eOk) {
-            es = targetDb->insert(blockId, nameW, pXrefDb.get(), true);
+            es = targetDb->insert(blockId, nameW, pXrefDb, true);
         }
-        // pXrefDb удалится автоматически при выходе из функции
+        delete pXrefDb;
 
         // Шаг 3: ОБРАБОТКА РЕЗУЛЬТАТА
         if (es == Acad::eDuplicateKey) {
@@ -83,7 +82,7 @@ AcDbObjectId TrinityFileManager::attachXref(
             targetDb->getSymbolTable(pBt, AcDb::kForRead);
             if (pBt->has(nameW)) {
                 pBt->getAt(nameW, blockId);
-                acutPrintf(_T("\n[FileManager] Block exists (dup), using it\n"));
+                //acutPrintf(_T("\n[FileManager] Block exists (dup), using it\n"));
             }
             pBt->close();
         }
@@ -93,7 +92,7 @@ AcDbObjectId TrinityFileManager::attachXref(
             return AcDbObjectId::kNull;
         }
         else {
-            acutPrintf(_T("\n[FileManager] XREF inserted: %s\n"), nameW);
+            //acutPrintf(_T("\n[FileManager] XREF inserted: %s\n"), nameW);
         }
     }
 
@@ -109,7 +108,7 @@ AcDbObjectId TrinityFileManager::attachXref(
     pBt->getAt(ACDB_MODEL_SPACE, pMs, AcDb::kForWrite);
     pBt->close();
 
-    BlockReferencePtr pRef(new AcDbBlockReference(pos, blockId));
+    AcDbBlockReference* pRef = new AcDbBlockReference(pos, blockId);
 
     if (rot.count > 0) {
         AcGeMatrix3d mat;
@@ -130,10 +129,10 @@ AcDbObjectId TrinityFileManager::attachXref(
     }
 
     AcDbObjectId refId;
-    pMs->appendAcDbEntity(refId, pRef.get());
+    pMs->appendAcDbEntity(refId, pRef);
     pRef->close();
     pMs->close();
 
-    acutPrintf(_T("\n[FileManager] XREF placed: %s\n"), nameW);
+    //acutPrintf(_T("\n[FileManager] XREF placed: %s\n"), nameW);
     return refId;
 }

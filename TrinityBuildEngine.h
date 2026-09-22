@@ -3,7 +3,6 @@
 #include "StdAfx.h"
 #include "TrinityCore.h"
 #include "TrinityFileManager.h"
-#include "DataCache.h"
 
 class TrinityBuildEngine {
 private:
@@ -33,9 +32,6 @@ private:
     // Используется в buildDwg для рекурсивной подготовки детей.
     std::string ensureFileExists(const std::string& code, int depth = 0);
 
-    // Инициализация кэша данных для проекта
-    void initializeCache(int projectId);
-
 public:
     TrinityBuildEngine(const std::string& basePath) : m_files(basePath) {}
 
@@ -43,10 +39,7 @@ public:
         return m_core.connect(host, user, pass, db);
     }
 
-    void shutdown() { 
-        m_core.disconnect(); 
-        DataCache::Instance().Clear();
-    }
+    void shutdown() { m_core.disconnect(); }
 
     // Главный метод: обработать все pending-проекты
     int processAllProjects(AcDbDatabase* targetDb);
