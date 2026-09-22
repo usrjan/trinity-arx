@@ -68,8 +68,13 @@ AcDbObjectId TrinityFileManager::attachXref(
                 // Если это XREF — проверяем, существует ли файл
                 if (pBlockRec->isFromExternalReference()) {
                     // Получаем путь к внешнему файлу
-                    const wchar_t* xrefPath = pBlockRec->pathName();
-                    bool fileExists = (xrefPath && _waccess(xrefPath, 0) == 0);
+                    wchar_t xrefPath[MAX_PATH];
+                    Acad::ErrorStatus pathEs = pBlockRec->pathName(xrefPath);
+                    
+                    bool fileExists = false;
+                    if (pathEs == Acad::eOk) {
+                        fileExists = (_waccess(xrefPath, 0) == 0);
+                    }
                     
                     if (!fileExists) {
                         // Файл удалён — нужно удалить старый блок и вставить заново
