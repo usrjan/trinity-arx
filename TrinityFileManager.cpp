@@ -67,13 +67,13 @@ AcDbObjectId TrinityFileManager::attachXref(
             if (es == Acad::eOk && pBlockRec) {
                 // Если это XREF — проверяем, существует ли файл
                 if (pBlockRec->isFromExternalReference()) {
-                    // Получаем путь к внешнему файлу
-                    wchar_t xrefPath[MAX_PATH];
+                    // Получаем путь к внешнему файлу через AcString
+                    AcString xrefPath;
                     Acad::ErrorStatus pathEs = pBlockRec->pathName(xrefPath);
                     
                     bool fileExists = false;
                     if (pathEs == Acad::eOk) {
-                        fileExists = (_waccess(xrefPath, 0) == 0);
+                        fileExists = (_waccess(xrefPath.kwszPtr(), 0) == 0);
                     }
                     
                     if (!fileExists) {
