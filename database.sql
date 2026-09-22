@@ -767,6 +767,9 @@ VALUES (@project_id, @assy_425_id, JSON_OBJECT('pos', JSON_ARRAY(1295, 0, 0), 'r
 INSERT INTO synapse (parent, child, data) 
 VALUES (@project_id, @door_850_id, JSON_OBJECT('pos', JSON_ARRAY(1730, 0, 0), 'rot', JSON_ARRAY(0, 0, 0, 0)));
 
+-- Объёмная конструкция C.S.0.3.425.850.ASSY (0, 0, 0)
+INSERT INTO synapse (parent, child, data) 
+VALUES (@project_id, @assy_425_id, JSON_OBJECT('pos', JSON_ARRAY(2590, 0, 0), 'rot', JSON_ARRAY(0, 0, 0, 0)));
 
 -- ============================================
 -- СБРОС СТАТУСА ПРОЕКТА
