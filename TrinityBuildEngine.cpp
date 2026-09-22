@@ -4,6 +4,7 @@
 #include "TrinityGeometryBuilder.h"
 #include "TrinityLayerManager.h"
 #include "TrinityAttributeBuilder.h"
+#include <io.h>
 
 // ============================================================
 // ГЛАВНЫЙ РЕКУРСИВНЫЙ МЕТОД
@@ -446,6 +447,10 @@ int TrinityBuildEngine::processAllProjects(AcDbDatabase* targetDb) {
     */
 
     for (auto& proj : projects) {
+        // Рекурсивно удаляем все файлы, связанные с этим проектом
+        // Это гарантирует, что сборка начнётся с чистого листа
+        deleteProjectFiles(proj.code);
+
         // Создаём файл проекта (рекурсивно)
         std::string actualPath = ensureFileExists(proj.code, 0);
 
@@ -465,4 +470,47 @@ int TrinityBuildEngine::processAllProjects(AcDbDatabase* targetDb) {
     }
 
     return static_cast<int>(projects.size());
+}
+
+// ============================================================
+// УДАЛЕНИЕ ФАЙЛОВ ПРОЕКТА (рекурсивно по детям)
+// ============================================================
+void TrinityBuildEngine::deleteProjectFiles(const std::string& code) {
+    // Загружаем нейрон
+    TrinityNeuron* pNeuron = m_core.loadNeuronByCode(code);
+    if (!pNeuron) return;
+
+    TrinityNeuron neuron = *pNeuron;
+    delete pNeuron;
+
+    // Определяем подкаталог и путь к файлу
+    std::string subdir;
+    if (neuron.type == "detail") {
+        subdir = m_files.detailsDir();
+    } else if (neuron.type == "assembly" || neuron.type == "construction") {
+        subdir = m_files.assembliesDir();
+    } else {
+        subdir = m_files.projectsDir();
+    }
+
+    std::string filePath = m_files.getFilePath(neuron.code, subdir);
+
+    // Удаляем файл, если он существует
+    if (m_files.fileExists(neuron.code, subdir)) {
+        wchar_t pathW[512];
+        MultiByteToWideChar(CP_UTF8, 0, filePath.c_str(), -1, pathW, 512);
+        _wunlink(pathW);
+        
+        wchar_t* wCode = utf2uni(neuron.code.c_str());
+        acutPrintf(_T("\n[BuildEngine] Deleted file: %s.dwg\n"), wCode);
+        free(wCode);
+    }
+
+    // Если это не деталь — рекурсивно удаляем детей
+    if (neuron.type != "detail") {
+        auto children = m_core.loadChildren(neuron.id);
+        for (auto& syn : children) {
+            deleteProjectFiles(syn.childCode);
+        }
+    }
 }

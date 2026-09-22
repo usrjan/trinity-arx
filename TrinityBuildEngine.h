@@ -32,6 +32,9 @@ private:
     // Используется в buildDwg для рекурсивной подготовки детей.
     std::string ensureFileExists(const std::string& code, int depth = 0);
 
+    // Рекурсивное удаление файлов проекта и всех его детей
+    void deleteProjectFiles(const std::string& code);
+
 public:
     TrinityBuildEngine(const std::string& basePath) : m_files(basePath) {}
 
