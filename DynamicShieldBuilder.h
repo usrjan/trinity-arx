@@ -12,6 +12,7 @@
 #include <DbBlockTableRecord.h>
 #include <DbDynBlockReferenceProperty.h>
 #include <DbDynBlockReference.h>
+#include <vector>
 
 /// <summary>
 /// Класс для создания динамических щитов опалубки.
@@ -24,44 +25,34 @@ public:
     ~DynamicShieldBuilder();
 
     /// <summary>
-    /// Создает динамический блок щита.
+    /// Создает динамический блок щита и добавляет его в базу данных.
     /// </summary>
     /// <param name="length">Начальная длина щита (мм)</param>
     /// <param name="width">Ширина щита (мм)</param>
     /// <param name="thickness">Толщина щита (мм)</param>
-    /// <param name="hasHoles">Наличие сквозных отверстий</param>
-    /// <returns>Указатель на запись блока в таблице блоков</returns>
-    AcDbBlockTableRecord* createDynamicShield(
+    /// <param name="holes">Массив отверстий (координаты X,Y относительно центра)</param>
+    /// <param name="blockName">Имя блока</param>
+    /// <returns>ObjectId созданного блока</returns>
+    static AcDbObjectId createDynamicShieldBlock(
         double length, 
         double width, 
         double thickness, 
-        bool hasHoles = false);
-
-    /// <summary>
-    /// Вставляет динамический блок в модель.
-    /// </summary>
-    /// <param name="pBlockRec">Запись динамического блока</param>
-    /// <param name="insertionPoint">Точка вставки</param>
-    /// <param name="rotation">Угол поворота</param>
-    /// <returns>Указатель на ссылку на блок (BlockReference)</returns>
-    AcDbBlockReference* insertDynamicShield(
-        AcDbBlockTableRecord* pBlockRec,
-        const AcGePoint3d& insertionPoint,
-        double rotation = 0.0);
+        const std::vector<AcGePoint2d>& holes,
+        const CString& blockName);
 
 private:
     /// <summary>
     /// Создает геометрию щита (контуры).
     /// </summary>
-    void addShieldGeometry(AcDbBlockTableRecord* pBlockRec, double length, double width, double thickness, bool hasHoles);
+    static void addShieldGeometry(AcDbBlockTableRecord* pBlockRec, double length, double width, double thickness, const std::vector<AcGePoint2d>& holes);
 
     /// <summary>
-    /// Добавляет линейный параметр длины.
+    /// Добавляет линейный параметр длины (Distance Parameter).
     /// </summary>
-    void addLengthParameter(AcDbBlockTableRecord* pBlockRec, double length);
+    static void addLengthParameter(AcDbBlockTableRecord* pBlockRec, double length);
 
     /// <summary>
-    /// Добавляет действие растягивания (Stretch) для изменения длины.
+    /// Добавляет действие растягивания (Stretch Action).
     /// </summary>
-    void addStretchAction(AcDbBlockTableRecord* pBlockRec, const AcDbObjectId& paramId, double length);
+    static void addStretchAction(AcDbBlockTableRecord* pBlockRec, const AcDbObjectId& paramId, double length);
 };

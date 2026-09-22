@@ -1,51 +1,47 @@
 ```
-# Build artifacts
+# Compiled and build artifacts
+*.o
 *.obj
 *.exe
 *.dll
-*.lib
-*.pdb
-*.ilk
-*.exp
-*.iobj
-*.ipdb
-*.tlog
-*.lastbuildstate
-*.vcxproj.user
-*.sdf
-*.opensdf
-*.suo
-*.VC.db
-*.VC.VC.opendb
+*.so
+*.a
+*.out
 
 # Dependencies
 node_modules/
-vendor/
+venv/
+.venv/
+__pycache__/
+.mypy_cache/
+.pytest_cache/
+target/
+.gradle/
 
-# Logs
+# Logs and temp files
 *.log
+*.tmp
+*.swp
+
+# Editors
+.vscode/
+.idea/
 
 # Environment
 .env
 .env.local
 *.env.*
 
-# Editors
-.vscode/
-.idea/
-*.swp
-*.swo
-
-# OS
-.DS_Store
-Thumbs.db
-
 # Coverage
 coverage/
 htmlcov/
-*.coverage
+.coverage
 
-# Compressed
+# System files
+.DS_Store
+Thumbs.db
+
+# Compressed files
 *.zip
 *.gz
 *.tar
