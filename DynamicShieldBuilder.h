@@ -1,6 +1,6 @@
 #pragma once
 
-#include <dbblockreference.h>
+#include "StdAfx.h"
 #include <dbdict.h>
 #include <dbxrecard.h>
 #include <geassign.h>
