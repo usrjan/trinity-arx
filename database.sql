@@ -485,6 +485,30 @@ INSERT INTO neuron (pid, type, data) VALUES (
     )
 );
 
+-- 425×850×10 — 10 отверстий
+INSERT INTO neuron (pid, type, data) VALUES (
+    @sidewalls_id, 'detail',
+    JSON_OBJECT(
+        'code', 'D.S.2.425.850.10.T1',
+        'category', 'sidewall',
+        'material', 'PLYWOOD-FSF',
+        'sort', 202,
+        'holes', JSON_ARRAY(
+            JSON_OBJECT('x', 15, 'y', 74.5),
+            JSON_OBJECT('x', 15, 'y', 350.5),
+            JSON_OBJECT('x', 15, 'y', 499.5),
+            JSON_OBJECT('x', 15, 'y', 775.5),
+            JSON_OBJECT('x', 74.5, 'y', 835),
+
+            JSON_OBJECT('x', 410, 'y', 74.5),
+            JSON_OBJECT('x', 410, 'y', 350.5),
+            JSON_OBJECT('x', 410, 'y', 499.5),
+            JSON_OBJECT('x', 410, 'y', 775.5),
+            JSON_OBJECT('x', 350.5, 'y', 835)
+        )
+    )
+);
+
 -- 425×1275×10 — без отверстий
 INSERT INTO neuron (pid, type, data) VALUES (
     @sidewalls_id, 'detail',
@@ -551,6 +575,26 @@ SELECT @panel_425_850_id, id, JSON_OBJECT('pos', JSON_ARRAY(0, 713, 10), 'rot', 
 FROM neuron WHERE JSON_UNQUOTE(JSON_EXTRACT(data, '$.code')) = 'D.S.3.425.125.10';
 
 -- ============================================
+-- КОНСТРУКЦИЯ: Щит 850x425 + 2 планки
+-- ============================================
+INSERT INTO neuron (pid, type, data) VALUES
+(@assemblies_id, 'construction', JSON_OBJECT('code', 'C.S.0.3.850.425', 'category', 'formwork'));
+SET @panel_850_425_id = LAST_INSERT_ID();
+
+-- Щит
+INSERT INTO synapse (parent, child, data) 
+SELECT @panel_850_425_id, id, JSON_OBJECT('pos', JSON_ARRAY(850, 0, 0), 'rot', JSON_ARRAY(0, 0, 1, 90))
+FROM neuron WHERE JSON_UNQUOTE(JSON_EXTRACT(data, '$.code')) = 'D.S.0.425.850.10';
+
+-- Планки
+INSERT INTO synapse (parent, child, data) 
+SELECT @panel_850_425_id, id, JSON_OBJECT('pos', JSON_ARRAY(0, 12, 10), 'rot', JSON_ARRAY(0, 0, 0, 0))
+FROM neuron WHERE JSON_UNQUOTE(JSON_EXTRACT(data, '$.code')) = 'D.S.3.850.125.10';
+INSERT INTO synapse (parent, child, data) 
+SELECT @panel_850_425_id, id, JSON_OBJECT('pos', JSON_ARRAY(0, 288, 10), 'rot', JSON_ARRAY(0, 0, 0, 0))
+FROM neuron WHERE JSON_UNQUOTE(JSON_EXTRACT(data, '$.code')) = 'D.S.3.850.125.10';
+
+-- ============================================
 -- КОНСТРУКЦИЯ: Щит 850×850 + 4 планки
 -- ============================================
 INSERT INTO neuron (pid, type, data) VALUES
@@ -585,9 +629,9 @@ SET @assemblies_id = (SELECT id FROM neuron WHERE JSON_UNQUOTE(JSON_EXTRACT(data
 INSERT INTO neuron (pid, type, data) VALUES (
     @assemblies_id,
     'construction',
-    JSON_OBJECT('code', 'C.S.0.3.425.850.ASSY', 'category', 'formwork')
+    JSON_OBJECT('code', 'C.S.0.3.425.425.ASSY', 'category', 'formwork')
 );
-SET @assy_id = LAST_INSERT_ID();
+SET @assy_425_id = LAST_INSERT_ID();
 
 SET @sw_425 = (SELECT MIN(id) FROM neuron WHERE JSON_UNQUOTE(JSON_EXTRACT(data, '$.code')) = 'D.S.2.425.425.10');
 SET @sw_850 = (SELECT MIN(id) FROM neuron WHERE JSON_UNQUOTE(JSON_EXTRACT(data, '$.code')) = 'D.S.2.425.850.10');
@@ -595,30 +639,104 @@ SET @panel_425_850 = (SELECT MIN(id) FROM neuron WHERE JSON_UNQUOTE(JSON_EXTRACT
 
 -- Боковые стенки (двойной поворот: Y 90° + Z 90°)
 INSERT INTO synapse (parent, child, data) VALUES
-(@assy_id, @sw_425, JSON_OBJECT('pos', JSON_ARRAY(0, 0, 0),
+(@assy_425_id, @sw_425, JSON_OBJECT('pos', JSON_ARRAY(0, 0, 0),
     'rot', JSON_ARRAY(JSON_ARRAY(0, 1, 0, 90), JSON_ARRAY(0, 0, 1, 90)))),
-(@assy_id, @sw_850, JSON_OBJECT('pos', JSON_ARRAY(0, 0, 425),
+(@assy_425_id, @sw_850, JSON_OBJECT('pos', JSON_ARRAY(0, 0, 425),
     'rot', JSON_ARRAY(JSON_ARRAY(0, 1, 0, 90), JSON_ARRAY(0, 0, 1, 90)))),
-(@assy_id, @sw_850, JSON_OBJECT('pos', JSON_ARRAY(0, 0, 1275),
+(@assy_425_id, @sw_850, JSON_OBJECT('pos', JSON_ARRAY(0, 0, 1275),
     'rot', JSON_ARRAY(JSON_ARRAY(0, 1, 0, 90), JSON_ARRAY(0, 0, 1, 90)))),
-(@assy_id, @sw_425, JSON_OBJECT('pos', JSON_ARRAY(0, 0, 2125),
+(@assy_425_id, @sw_425, JSON_OBJECT('pos', JSON_ARRAY(0, 0, 2125),
     'rot', JSON_ARRAY(JSON_ARRAY(0, 1, 0, 90), JSON_ARRAY(0, 0, 1, 90))));
 
 -- Щиты с планками (одиночный поворот вокруг X 90°)
 INSERT INTO synapse (parent, child, data) VALUES
-(@assy_id, @panel_425_850, JSON_OBJECT('pos', JSON_ARRAY(10, 30, 0),
+(@assy_425_id, @panel_425_850, JSON_OBJECT('pos', JSON_ARRAY(10, 30, 0),
     'rot', JSON_ARRAY(1, 0, 0, 90))),
-(@assy_id, @panel_425_850, JSON_OBJECT('pos', JSON_ARRAY(10, 30, 850),
+(@assy_425_id, @panel_425_850, JSON_OBJECT('pos', JSON_ARRAY(10, 30, 850),
     'rot', JSON_ARRAY(1, 0, 0, 90))),
-(@assy_id, @panel_425_850, JSON_OBJECT('pos', JSON_ARRAY(10, 30, 1700),
+(@assy_425_id, @panel_425_850, JSON_OBJECT('pos', JSON_ARRAY(10, 30, 1700),
     'rot', JSON_ARRAY(1, 0, 0, 90))),
 
-(@assy_id, @panel_425_850, JSON_OBJECT('pos', JSON_ARRAY(10, 395, 850),
+(@assy_425_id, @panel_425_850, JSON_OBJECT('pos', JSON_ARRAY(10, 395, 850),
     'rot', JSON_ARRAY(1, 0, 0, -90))),
-(@assy_id, @panel_425_850, JSON_OBJECT('pos', JSON_ARRAY(10, 395, 1700),
+(@assy_425_id, @panel_425_850, JSON_OBJECT('pos', JSON_ARRAY(10, 395, 1700),
     'rot', JSON_ARRAY(1, 0, 0, -90))),
-(@assy_id, @panel_425_850, JSON_OBJECT('pos', JSON_ARRAY(10, 395, 2550),
+(@assy_425_id, @panel_425_850, JSON_OBJECT('pos', JSON_ARRAY(10, 395, 2550),
     'rot', JSON_ARRAY(1, 0, 0, -90)));
+
+
+INSERT INTO neuron (pid, type, data) VALUES (
+    @assemblies_id,
+    'construction',
+    JSON_OBJECT('code', 'C.S.0.3.425.850.ASSY', 'category', 'formwork')
+);
+SET @assy_850_id = LAST_INSERT_ID();
+
+SET @sw_425 = (SELECT MIN(id) FROM neuron WHERE JSON_UNQUOTE(JSON_EXTRACT(data, '$.code')) = 'D.S.2.425.425.10');
+SET @sw_850 = (SELECT MIN(id) FROM neuron WHERE JSON_UNQUOTE(JSON_EXTRACT(data, '$.code')) = 'D.S.2.425.850.10');
+SET @panel_850_850 = (SELECT MIN(id) FROM neuron WHERE JSON_UNQUOTE(JSON_EXTRACT(data, '$.code')) = 'C.S.0.3.850.850');
+
+-- Боковые стенки (двойной поворот: Y 90° + Z 90°)
+INSERT INTO synapse (parent, child, data) VALUES
+(@assy_850_id, @sw_425, JSON_OBJECT('pos', JSON_ARRAY(0, 0, 0),
+    'rot', JSON_ARRAY(JSON_ARRAY(0, 1, 0, 90), JSON_ARRAY(0, 0, 1, 90)))),
+(@assy_850_id, @sw_850, JSON_OBJECT('pos', JSON_ARRAY(0, 0, 425),
+    'rot', JSON_ARRAY(JSON_ARRAY(0, 1, 0, 90), JSON_ARRAY(0, 0, 1, 90)))),
+(@assy_850_id, @sw_850, JSON_OBJECT('pos', JSON_ARRAY(0, 0, 1275),
+    'rot', JSON_ARRAY(JSON_ARRAY(0, 1, 0, 90), JSON_ARRAY(0, 0, 1, 90)))),
+(@assy_850_id, @sw_425, JSON_OBJECT('pos', JSON_ARRAY(0, 0, 2125),
+    'rot', JSON_ARRAY(JSON_ARRAY(0, 1, 0, 90), JSON_ARRAY(0, 0, 1, 90))));
+
+-- Щиты с планками (одиночный поворот вокруг X 90°)
+INSERT INTO synapse (parent, child, data) VALUES
+(@assy_850_id, @panel_850_850, JSON_OBJECT('pos', JSON_ARRAY(10, 30, 0),
+    'rot', JSON_ARRAY(1, 0, 0, 90))),
+(@assy_850_id, @panel_850_850, JSON_OBJECT('pos', JSON_ARRAY(10, 30, 850),
+    'rot', JSON_ARRAY(1, 0, 0, 90))),
+(@assy_850_id, @panel_850_850, JSON_OBJECT('pos', JSON_ARRAY(10, 30, 1700),
+    'rot', JSON_ARRAY(1, 0, 0, 90))),
+
+(@assy_850_id, @panel_850_850, JSON_OBJECT('pos', JSON_ARRAY(10, 395, 850),
+    'rot', JSON_ARRAY(1, 0, 0, -90))),
+(@assy_850_id, @panel_850_850, JSON_OBJECT('pos', JSON_ARRAY(10, 395, 1700),
+    'rot', JSON_ARRAY(1, 0, 0, -90))),
+(@assy_850_id, @panel_850_850, JSON_OBJECT('pos', JSON_ARRAY(10, 395, 2550),
+    'rot', JSON_ARRAY(1, 0, 0, -90)));
+
+INSERT INTO neuron (pid, type, data) VALUES (
+    @assemblies_id,
+    'construction',
+    JSON_OBJECT('code', 'C.S.0.3.425.850.DOOR', 'category', 'formwork')
+);
+SET @door_850_id = LAST_INSERT_ID();
+
+SET @sw_425 = (SELECT MIN(id) FROM neuron WHERE JSON_UNQUOTE(JSON_EXTRACT(data, '$.code')) = 'D.S.2.425.425.10');
+SET @sw_850 = (SELECT MIN(id) FROM neuron WHERE JSON_UNQUOTE(JSON_EXTRACT(data, '$.code')) = 'D.S.2.425.850.10');
+SET @sw_850_t1 = (SELECT MIN(id) FROM neuron WHERE JSON_UNQUOTE(JSON_EXTRACT(data, '$.code')) = 'D.S.2.425.850.10.T1');
+
+SET @panel_850_425 = (SELECT MIN(id) FROM neuron WHERE JSON_UNQUOTE(JSON_EXTRACT(data, '$.code')) = 'C.S.0.3.850.425');
+
+-- Боковые стенки (двойной поворот: Y 90° + Z 90°)
+INSERT INTO synapse (parent, child, data) VALUES
+(@door_850_id, @sw_425, JSON_OBJECT('pos', JSON_ARRAY(0, 0, 0),
+    'rot', JSON_ARRAY(JSON_ARRAY(0, 1, 0, 90), JSON_ARRAY(0, 0, 1, 90)))),
+(@door_850_id, @sw_850, JSON_OBJECT('pos', JSON_ARRAY(0, 0, 425),
+    'rot', JSON_ARRAY(JSON_ARRAY(0, 1, 0, 90), JSON_ARRAY(0, 0, 1, 90)))),
+(@door_850_id, @sw_850_t1, JSON_OBJECT('pos', JSON_ARRAY(0, 0, 1275),
+    'rot', JSON_ARRAY(JSON_ARRAY(0, 1, 0, 90), JSON_ARRAY(0, 0, 1, 90)))),
+(@door_850_id, @sw_425, JSON_OBJECT('pos', JSON_ARRAY(0, 0, 2125),
+    'rot', JSON_ARRAY(JSON_ARRAY(0, 1, 0, 90), JSON_ARRAY(0, 0, 1, 90))));
+
+-- Щиты с планками (одиночный поворот вокруг X 90°)
+INSERT INTO synapse (parent, child, data) VALUES
+(@door_850_id, @panel_850_425, JSON_OBJECT('pos', JSON_ARRAY(10, 30, 2125),
+    'rot', JSON_ARRAY(1, 0, 0, 90))),
+
+(@door_850_id, @panel_850_425, JSON_OBJECT('pos', JSON_ARRAY(10, 395, 2550),
+    'rot', JSON_ARRAY(1, 0, 0, -90))),
+
+(@door_850_id, @panel_850_425, JSON_OBJECT('pos', JSON_ARRAY(860, 0, 2125),
+    'rot', JSON_ARRAY(0, 1, 0, -180)));
 
 -- ============================================
 -- ПРОЕКТ: PROJ-TEST-001
@@ -635,7 +753,20 @@ SET @project_id = LAST_INSERT_ID();
 
 -- Объёмная конструкция C.S.0.3.425.850.ASSY (0, 0, 0)
 INSERT INTO synapse (parent, child, data) 
-VALUES (@project_id, @assy_id, JSON_OBJECT('pos', JSON_ARRAY(0, 0, 0), 'rot', JSON_ARRAY(0, 0, 0, 0)));
+VALUES (@project_id, @assy_425_id, JSON_OBJECT('pos', JSON_ARRAY(0, 0, 0), 'rot', JSON_ARRAY(0, 0, 0, 0)));
+
+-- Объёмная конструкция C.S.0.3.850.850.ASSY (435, 0, 0)
+INSERT INTO synapse (parent, child, data) 
+VALUES (@project_id, @assy_850_id, JSON_OBJECT('pos', JSON_ARRAY(435, 0, 0), 'rot', JSON_ARRAY(0, 0, 0, 0)));
+
+-- Объёмная конструкция C.S.0.3.425.850.ASSY (0, 0, 0)
+INSERT INTO synapse (parent, child, data) 
+VALUES (@project_id, @assy_425_id, JSON_OBJECT('pos', JSON_ARRAY(1295, 0, 0), 'rot', JSON_ARRAY(0, 0, 0, 0)));
+
+-- Объёмная конструкция C.S.0.3.425.850.DOOR (0, 0, 0)
+INSERT INTO synapse (parent, child, data) 
+VALUES (@project_id, @door_850_id, JSON_OBJECT('pos', JSON_ARRAY(1730, 0, 0), 'rot', JSON_ARRAY(0, 0, 0, 0)));
+
 
 -- ============================================
 -- СБРОС СТАТУСА ПРОЕКТА
