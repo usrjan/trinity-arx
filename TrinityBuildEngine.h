@@ -9,9 +9,11 @@ private:
     TrinityCore m_core;
     TrinityFileManager m_files;
 
-    // Рекурсивное обеспечение существования DWG
-    // Если файл есть — вставляет XREF и возвращает его ID
-    // Если файла нет — строит его и потом вставляет XREF
+    // Рекурсивное обеспечение существования DWG + вставка XREF
+    // Файл берётся у ensureFileExists (там же вся логика постройки),
+    // здесь только attachXref в целевую базу.
+    // При position == nullPos вставку не выполняет (возвращает kNull) —
+    // этот режим используется рекурсией, когда нужен только файл.
     AcDbObjectId ensureExists(const std::string& code,
                                const AcGePoint3d& position,
                                const TrinityRotationCompound& rotation,
@@ -27,9 +29,15 @@ private:
     // Геометрия → временная база → wblock → чистая база
     AcDbDatabase* buildDetail(const TrinityNeuron& detail);
 
+    // Общие правила путей: тип нейрона → подкаталог → полный путь файла
+    // (используется в ensureFileExists и deleteProjectFiles)
+    std::string subdirForType(const std::string& type);
+    std::string filePathForNeuron(const TrinityNeuron& neuron);
+
     // Обеспечить существование файла детали/конструкции
-    // Без вставки XREF. Возвращает путь к файлу.
-    // Используется в buildDwg для рекурсивной подготовки детей.
+    // Загружает нейрон, при отсутствии файла строит его (buildDetail/buildDwg)
+    // и сохраняет. Вставки XREF НЕ делает. Возвращает путь к файлу
+    // или пустую строку при ошибке.
     std::string ensureFileExists(const std::string& code, int depth = 0);
 
     // Рекурсивное удаление файлов проекта и всех его детей

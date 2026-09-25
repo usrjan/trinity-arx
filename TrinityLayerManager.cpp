@@ -52,20 +52,21 @@ AcDbObjectId TrinityLayerManager::createOrGetLayer(AcDbDatabase* db, const std::
 }
 
 // ============================================
-// СЛОЙ _tag (красный, выключен)
+// ТЕХНИЧЕСКИЕ СЛОИ — общая логика (ensureTechLayer)
+// Красный (цвет 1), выключен по умолчанию.
 // ============================================
-void TrinityLayerManager::ensureTagLayer(AcDbDatabase* db) {
+void TrinityLayerManager::ensureTechLayer(AcDbDatabase* db, const wchar_t* layerName) {
     AcDbLayerTable* pLayerTable = nullptr;
     if (db->getSymbolTable(pLayerTable, AcDb::kForWrite) != Acad::eOk) return;
 
-    if (!pLayerTable->has(_T("_tag"))) {
+    if (!pLayerTable->has(layerName)) {
         AcDbLayerTableRecord* pRecord = new AcDbLayerTableRecord();
-        pRecord->setName(_T("_tag"));
+        pRecord->setName(layerName);
 
         AcCmColor color;
-        color.setColorIndex(1);
+        color.setColorIndex(1);   // красный
         pRecord->setColor(color);
-        pRecord->setIsOff(true);
+        pRecord->setIsOff(true);  // выключен по умолчанию
 
         AcDbObjectId layerId = AcDbObjectId::kNull;
         pLayerTable->add(layerId, pRecord);
@@ -74,26 +75,9 @@ void TrinityLayerManager::ensureTagLayer(AcDbDatabase* db) {
 
     pLayerTable->close();
 }
-// ============================================
-// СЛОЙ _bolt (красный, выключен)
-// ============================================
-void TrinityLayerManager::ensureBoltLayer(AcDbDatabase* db) {
-    AcDbLayerTable* pLayerTable = nullptr;
-    if (db->getSymbolTable(pLayerTable, AcDb::kForWrite) != Acad::eOk) return;
 
-    if (!pLayerTable->has(_T("_bolt"))) {
-        AcDbLayerTableRecord* pRecord = new AcDbLayerTableRecord();
-        pRecord->setName(_T("_bolt"));
+// Слой _tag (атрибуты DETAIL_CODE)
+void TrinityLayerManager::ensureTagLayer(AcDbDatabase* db)  { ensureTechLayer(db, LAYER_TAG_W);  }
 
-        AcCmColor color;
-        color.setColorIndex(1);
-        pRecord->setColor(color);
-        pRecord->setIsOff(true);
-
-        AcDbObjectId layerId = AcDbObjectId::kNull;
-        pLayerTable->add(layerId, pRecord);
-        pRecord->close();
-    }
-
-    pLayerTable->close();
-}
+// Слой _bolt (маркеры болтов)
+void TrinityLayerManager::ensureBoltLayer(AcDbDatabase* db) { ensureTechLayer(db, LAYER_BOLT_W); }

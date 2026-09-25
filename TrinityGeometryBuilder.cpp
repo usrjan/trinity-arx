@@ -253,7 +253,7 @@ void TrinityGeometryBuilder::drawBoltMarkers(const TrinityNeuron& d,
         pCircle->setCenter(pos);
         pCircle->setRadius(boltRadius);
         pCircle->setNormal(AcGeVector3d(1, 0, 0));  // плоскость YZ
-        pCircle->setLayer(_T("_bolt"));
+        pCircle->setLayer(TrinityLayerManager::LAYER_BOLT_W);
 
         AcDbObjectId circleId;
         pMs->appendAcDbEntity(circleId, pCircle);
