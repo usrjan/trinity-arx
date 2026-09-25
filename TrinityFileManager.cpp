@@ -130,17 +130,30 @@ AcDbObjectId TrinityFileManager::attachXref(
     // Шаг 2: Если блока нет — читаем файл и вставляем
     if (blockId == AcDbObjectId::kNull) {
         // NB: ObjectARX переопределяет operator new для AcDbDatabase (AcHeapOperators),
-        // который не поддерживает placement-форму std::nothrow (ошибка C2661).
-        // При реальном OOM ARX-аллокатор выбрасывает/завершает работу сам,
-        // поэтому проверка !pXrefDb здесь не требуется.
-        AcDbDatabase* pXrefDb = new AcDbDatabase(Adesk::kTrue, Adesk::kTrue);
-        es = pXrefDb->readDwgFile(pathW);
-
-        if (es == Acad::eOk) {
-            es = targetDb->insert(blockId, nameW, pXrefDb, true);
-            wasInserted = (es == Acad::eOk);
+        // который не поддерживает placement-форму std::nothrow (ошибка C2661),
+        // поэтому используется обычный new.
+        // Флаг noVersionCheck=true — чтобы DWG, сохранённый другой версией/
+        // конструктором базы, читался без ошибки версии.
+        // NB: readDwgFile НЕ закрывает базу при ошибке — её всё равно нужно
+        // удалить, иначе утечка. Поэтому create/read/insert и очистка разделены.
+        AcDbDatabase* pXrefDb = new AcDbDatabase(false, true);
+        if (!pXrefDb) {
+            acutPrintf(_T("\n[FileManager] attachXref: out of memory\n"));
+            return AcDbObjectId::kNull;
         }
-        delete pXrefDb;
+
+        es = pXrefDb->readDwgFile(pathW);
+        if (es != Acad::eOk) {
+            acutPrintf(_T("\n[FileManager] readDwgFile failed: %s (error %d)\n"), pathW, es);
+            delete pXrefDb;   // база не закрыта readDwgFile — удаляем сами
+            return AcDbObjectId::kNull;
+        }
+
+        // NB: AcDbDatabase::insert() ЗАКРЫВАЕТ переданную базу самостоятельно
+        // (независимо от кода возврата). Повторный delete вызывал
+        // Access Violation (double-delete / use-after-free в куче ObjectARX).
+        es = targetDb->insert(blockId, nameW, pXrefDb, true);
+        wasInserted = (es == Acad::eOk);
 
         // Шаг 3: ОБРАБОТКА РЕЗУЛЬТАТА
         if (es == Acad::eDuplicateKey) {
