@@ -16,27 +16,27 @@ TrinityARX читает **нейроны** и **синапсы** из MySQL и
 ## Архитектура
 
 ```
-┌──────────────────────────────────────┐  
-│  AutoCAD 2026                        │  
-│  TRINITY_START / TRINITY_STOP        │  
-└────────────────┬─────────────────────┘  
+┌────────────────────────────────────────┐  
+│  AutoCAD 2026                          │  
+│  TRINITY_START / TRINITY_STOP          │  
+└────────────────┬───────────────────────┘  
                  │  
-┌────────────────┴─────────────────────┐  
-│  TrinityBuildEngine                  │  
-│  Рекурсивный ensureExists /          │  
-│  ensureFileExists                    │  
-└────────────────┬─────────────────────┘  
+┌────────────────┴───────────────────────┐  
+│  TrinityBuildEngine                    │  
+│  Рекурсивный ensureExists /            │  
+│  ensureFileExists                      │  
+└────────────────┬───────────────────────┘  
                  │  
-┌────────────────┴─────────────────────┐  
-│  TrinityCore / TrinityGeometryBuilder│  
-│  / TrinityFileManager / LayerManager │  
-│  / AttributeBuilder                  │  
-└────────────────┬─────────────────────┘  
+┌────────────────┴───────────────────────┐  
+│  TrinityCore / TrinityGeometryBuilder  │  
+│  / TrinityFileManager / LayerManager   │  
+│  / AttributeBuilder                    │  
+└────────────────┬───────────────────────┘  
                  │  
-┌────────────────┴─────────────────────┐  
-│  MySQL (trinity_core)                │  
-│  neuron, synapse, text               │  
-└──────────────────────────────────────┘
+┌────────────────┴───────────────────────┐  
+│  MySQL (trinity_core)                  │  
+│  neuron, synapse, text                 │  
+└────────────────────────────────────────┘
 ```
 
 ## Требования
