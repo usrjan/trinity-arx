@@ -19,20 +19,10 @@ namespace {
     constexpr unsigned MYSQL_CONNECT_TIMEOUT_S = 5;
     constexpr double   MIN_PING_INTERVAL_S     = 30;    // мин. интервал между mysql_ping, сек
 
-    // Тип флага для MYSQL_OPT_RECONNECT зависит от версии клиента MySQL:
-    //   - в старом C API (< 8.0) аргумент mysql_options() имел тип my_bool (unsigned char);
-    //   - начиная с MySQL Connector/C 8.0 typedef my_bool удалён из mysql.h,
-    //     и опция ожидает bool.
-    // MYSQL_VERSION_ID определяется в mysql_version.h (подключается через mysql.h).
-    // Для коннектора 8.0.46: MYSQL_VERSION_ID == 80046 -> используется bool.
-#if defined(MYSQL_VERSION_ID) && MYSQL_VERSION_ID >= 80000
-    using MySqlReconnectFlag = bool;
-    constexpr MySqlReconnectFlag MYSQL_RECONNECT_FLAG_ON = true;
-#else
-    // MySQL/MariaDB клиентских библиотек до 8.0: my_bool ещё объявлен в mysql.h
-    using MySqlReconnectFlag = my_bool;
-    constexpr MySqlReconnectFlag MYSQL_RECONNECT_FLAG_ON = 1;
-#endif
+// Примечание по версии клиента: в MySQL Connector/C 8.0 typedef my_bool удалён из
+// mysql.h, а опция MYSQL_OPT_RECONNECT — из enum_mysql_sock_option (не поддерживается).
+// Поэтому переподключение реализовано на уровне приложения (ensureConnected/reconnect),
+// и тип my_bool в этом файле не используется нигде.
 
     // Ошибки MySQL, означающие обрыв / потерю соединения (нужно переподключаться).
     // Сравниваем по числовым кодам (errmsg.h), т.к. в разных версиях коннектора
@@ -73,16 +63,15 @@ bool TrinityCore::connect(const char* host, const char* user,
     // Таймауты сокета: без них запрос к оборванному соединению может «висеть» минутами
     // (по умолчанию wait_timeout сервера + TCP-ретраи).
     unsigned timeout = MYSQL_CONNECT_TIMEOUT_S;
-    mysql_options(m_mysql, MYSQL_OPT_CONNECT_TIMEOUT, &timeout);
+    mysql_options(m_mysql, MYSQL_OPT_CONNECT_TIMEOUT, static_cast<const void*>(&timeout));
     timeout = MYSQL_READ_TIMEOUT_S;
-    mysql_options(m_mysql, MYSQL_OPT_READ_TIMEOUT, &timeout);
+    mysql_options(m_mysql, MYSQL_OPT_READ_TIMEOUT, static_cast<const void*>(&timeout));
     timeout = MYSQL_WRITE_TIMEOUT_S;
-    mysql_options(m_mysql, MYSQL_OPT_WRITE_TIMEOUT, &timeout);
+    mysql_options(m_mysql, MYSQL_OPT_WRITE_TIMEOUT, static_cast<const void*>(&timeout));
 
-    // Разрешаем клиенту самим пересылать запросы при потере соединения.
-    // Это подстраховка: наш ensureConnected() делает явный пинг и переподключение.
-    MySqlReconnectFlag reconnectFlag = MYSQL_RECONNECT_FLAG_ON;
-    mysql_options(m_mysql, MYSQL_OPT_RECONNECT, &reconnectFlag);
+    // Примечание: MYSQL_OPT_RECONNECT в MySQL Connector/C 8.0 НЕ поддерживается
+    // (константа удалена из enum_mysql_sock_option). Автоматическое восстановление
+    // после обрыва полностью обеспечивают наши ensureConnected() / reconnect().
 
     if (!mysql_real_connect(m_mysql, m_host.c_str(), m_user.c_str(),
                             m_pass.c_str(), m_db.c_str(), 0, nullptr, 0)) {
@@ -132,13 +121,13 @@ bool TrinityCore::reconnect(int maxAttempts, unsigned delayMs) {
         if (!m_mysql) return false;
 
         unsigned timeout = MYSQL_CONNECT_TIMEOUT_S;
-        mysql_options(m_mysql, MYSQL_OPT_CONNECT_TIMEOUT, &timeout);
+        mysql_options(m_mysql, MYSQL_OPT_CONNECT_TIMEOUT, static_cast<const void*>(&timeout));
         timeout = MYSQL_READ_TIMEOUT_S;
-        mysql_options(m_mysql, MYSQL_OPT_READ_TIMEOUT, &timeout);
+        mysql_options(m_mysql, MYSQL_OPT_READ_TIMEOUT, static_cast<const void*>(&timeout));
         timeout = MYSQL_WRITE_TIMEOUT_S;
-        mysql_options(m_mysql, MYSQL_OPT_WRITE_TIMEOUT, &timeout);
-        MySqlReconnectFlag reconnectFlag = MYSQL_RECONNECT_FLAG_ON;
-        mysql_options(m_mysql, MYSQL_OPT_RECONNECT, &reconnectFlag);
+        mysql_options(m_mysql, MYSQL_OPT_WRITE_TIMEOUT, static_cast<const void*>(&timeout));
+        // MYSQL_OPT_RECONNECT в Connector/C 8.0 не поддерживается —
+        // повторное соединение выполняется этим reconnect() (цикл попыток выше).
 
         if (mysql_real_connect(m_mysql, m_host.c_str(), m_user.c_str(),
                                m_pass.c_str(), m_db.c_str(), 0, nullptr, 0)) {
