@@ -19,9 +19,11 @@ static bool g_isProcessing = false;
 // WM_TRINITY_TICK на главном потоке AutoCAD, и активный документ УЖЕ
 // залочен на запись (write-lock) внутри TrinityTimer. Именно поэтому
 // здесь легально обращаться к workingDatabase() и модифицировать её.
-// Запись в документ без этого лога нарушала протокол AutoCAD и приводила
+// Запись в документ без этого лока нарушала протокол AutoCAD и приводила
 // к Access Violation (крах acad.exe).
-void CALLBACK TimerProc(HWND, UINT, UINT_PTR, DWORD) {
+// Сигнатура — простой void(): сигнатура Win32 TIMERPROC здесь не нужна,
+// т.к. низкоуровневый таймер-процедур инкапсулирован в TrinityTimer.
+void TimerProc() {
     trinityProcess();
 }
 
