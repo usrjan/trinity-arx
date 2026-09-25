@@ -147,6 +147,10 @@ AcDbDatabase* TrinityBuildEngine::buildDetail(const TrinityNeuron& detail) {
 
     if (esMs != Acad::eOk || !pMs) {
         acutPrintf(_T("\n[BuildEngine] getModelSpace failed: %d\n"), (int)esMs);
+        // ВАЖНО: закрыть частично открытый BTR перед удалением базы —
+        // удаление AcDbDatabase с открытыми объектами = Access Violation.
+        if (pMs) pMs->close();
+        // solid ещё НЕ добавлен в базу — его можно и нужно удалить напрямую.
         delete solid;
         delete tempDb;
         return nullptr;
@@ -161,7 +165,15 @@ AcDbDatabase* TrinityBuildEngine::buildDetail(const TrinityNeuron& detail) {
         acutPrintf(_T("\n[BuildEngine] appendAcDbEntity(solid) failed: %d\n"), (int)esApp);
         solid->close();
         pMs->close();
-        delete solid;
+        // ВАЖНО (фикс Access Violation): delete на объекте AcDbObject, уже
+        // приписанном к базе, запрещён документацией ObjectARX. Если append
+        // частично состоялся (solidId валиден) — удаляем через erase(),
+        // иначе объект будет освобождён вместе с tempDb.
+        if (solidId.isValid()) {
+            solid->erase();
+        } else {
+            delete solid;
+        }
         delete tempDb;
         return nullptr;
     }
@@ -300,6 +312,10 @@ AcDbDatabase* TrinityBuildEngine::buildDetail(const TrinityNeuron& detail) {
 
     if (esMs2 != Acad::eOk || !pMs2) {
         acutPrintf(_T("\n[BuildEngine] getModelSpace(cleanDb) failed: %d\n"), (int)esMs2);
+        // ВАЖНО: если getAt частично открыл BTR (esMs != eOk, но pMs2 != nullptr),
+        // обязательно закрыть её ПЕРЕД delete cleanDb — иначе удаление базы
+        // с открытым объектом вызывает Fatal Error / Access Violation.
+        if (pMs2) pMs2->close();
         delete cleanDb;
         return nullptr;
     }
