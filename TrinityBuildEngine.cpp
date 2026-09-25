@@ -305,27 +305,31 @@ AcDbDatabase* TrinityBuildEngine::buildDetail(const TrinityNeuron& detail) {
     }
 
     AcDbBlockTableRecordIterator* pIter = nullptr;
-    pMs2->newIterator(pIter);
-
-    if (pIter) {
-        wchar_t matLayerW[256];
-        MultiByteToWideChar(CP_UTF8, 0, layer.c_str(), -1, matLayerW, 256);
-
-        for (pIter->start(); !pIter->done(); pIter->step()) {
-            AcDbEntity* pEnt = nullptr;
-            if (pIter->getEntity(pEnt, AcDb::kForWrite) == Acad::eOk && pEnt) {
-                if (pEnt->isKindOf(AcDb3dSolid::desc())) {
-                    pEnt->setLayer(matLayerW);        // солид → материал
-                } else if (pEnt->isKindOf(AcDbCircle::desc())) {
-                    pEnt->setLayer(_T("_bolt"));       // кружочек → _bolt
-                } else {
-                    pEnt->setLayer(_T("_tag"));        // атрибут → _tag
-                }
-                pEnt->close();
-            }
-        }
-        delete pIter;
+    Acad::ErrorStatus esIter = pMs2->newIterator(pIter);
+    if (esIter != Acad::eOk || !pIter) {
+        acutPrintf(_T("\n[BuildEngine] newIterator(cleanDb) failed: %d\n"), (int)esIter);
+        pMs2->close();  // close() перед delete — иначе открытая BTR утечёт при удалении базы
+        delete cleanDb;
+        return nullptr;
     }
+
+    wchar_t matLayerW[256];
+    MultiByteToWideChar(CP_UTF8, 0, layer.c_str(), -1, matLayerW, 256);
+
+    for (pIter->start(); !pIter->done(); pIter->step()) {
+        AcDbEntity* pEnt = nullptr;
+        if (pIter->getEntity(pEnt, AcDb::kForWrite) == Acad::eOk && pEnt) {
+            if (pEnt->isKindOf(AcDb3dSolid::desc())) {
+                pEnt->setLayer(matLayerW);        // солид → материал
+            } else if (pEnt->isKindOf(AcDbCircle::desc())) {
+                pEnt->setLayer(_T("_bolt"));       // кружочек → _bolt
+            } else {
+                pEnt->setLayer(_T("_tag"));        // атрибут → _tag
+            }
+            pEnt->close();
+        }
+    }
+    delete pIter;
 
     pMs2->close();
 
