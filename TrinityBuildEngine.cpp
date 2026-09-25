@@ -270,6 +270,7 @@ AcDbDatabase* TrinityBuildEngine::buildDetail(const TrinityNeuron& detail) {
         // Сверлим
         for (const auto& pos : holePositions) {
             AcDb3dSolid* pCylinder = new AcDb3dSolid();
+            if (!pCylinder) continue;
             pCylinder->createFrustum(height, holeRadius, holeRadius, holeRadius);
 
             AcGeMatrix3d mat;
