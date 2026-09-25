@@ -4,6 +4,65 @@
 #include <ctime>   // time_t / time() — троттлинг mysql_ping в ensureConnected()
 
 // ============================================
+// СБОРКА БЕЗ MYSQL CLIENT (mysql.h не найден)
+// ============================================
+// Если на машине разработки нет клиентской библиотеки MySQL, StdAfx.h
+// определяет TRINITY_HAS_MYSQL = 0. Чтобы проект при этом всё равно
+// собирался (как раньше), ниже — заглушки модуля БД: все функции
+// возвращают «нет подключения» и печатают одно понятное сообщение.
+// Установите Connector/C ZIP и укажите путь MysqlIncludeDir в vcxproj,
+// чтобы включить реальный доступ к базе.
+#if !defined(TRINITY_HAS_MYSQL) || (TRINITY_HAS_MYSQL == 0)
+
+namespace {
+    void warnNoMysql() {
+        static bool warned = false;
+        if (!warned) {
+            warned = true;
+            acutPrintf(_T("\n[TrinityCore] MySQL client library is not installed on this machine.\n"));
+            acutPrintf(_T("[TrinityCore] Database features are disabled. Install MySQL Connector/C (ZIP)\n"));
+            acutPrintf(_T("[TrinityCore] and set MysqlIncludeDir/MysqlLibDir in Trinity.vcxproj, then rebuild.\n"));
+        }
+    }
+}
+
+TrinityCore::~TrinityCore() {}
+
+bool TrinityCore::connect(const char*, const char*, const char*, const char*) {
+    warnNoMysql();
+    return false;
+}
+void TrinityCore::disconnect() {}
+bool TrinityCore::reconnect(int, unsigned) { return false; }
+bool TrinityCore::ensureConnected() { return false; }
+bool TrinityCore::recoverQuery(const char*) { return false; }
+
+std::string TrinityCore::escapeSqlLiteral(const std::string& value, bool emptyMeansNull) const {
+    (void)emptyMeansNull;
+    // Без mysql_real_escape_string экранируем минимально: одинарные кавычки
+    // удваиваем, обратные слеши удваиваем — литерал в SQL не «сломается».
+    std::string out;
+    out.reserve(value.size() + 8);
+    for (char c : value) {
+        if (c == '\'')      out += "''";
+        else if (c == '\\') out += "\\\\";
+        else                out += c;
+    }
+    return out;
+}
+
+TrinityNeuron* TrinityCore::loadNeuronByCode(const std::string&) { warnNoMysql(); return nullptr; }
+TrinityNeuron* TrinityCore::loadNeuronById(int)                  { warnNoMysql(); return nullptr; }
+std::vector<TrinitySynapse> TrinityCore::loadChildren(int)       { warnNoMysql(); return {}; }
+std::vector<TrinityNeuron>  TrinityCore::loadPendingProjects()   { warnNoMysql(); return {}; }
+bool TrinityCore::markNeuronDone(int)                            { warnNoMysql(); return false; }
+
+TrinityNeuron TrinityCore::parseNeuronRow(MYSQL_ROW)   { return {}; }
+TrinitySynapse TrinityCore::parseSynapseRow(MYSQL_ROW) { return {}; }
+
+#else // ==================== ПОЛНАЯ РЕАЛИЗАЦИЯ С MYSQL ====================
+
+// ============================================
 // КОНСТРУКТОР / ДЕСТРУКТОР
 // ============================================
 TrinityCore::~TrinityCore() { disconnect(); }
@@ -507,3 +566,4 @@ TrinityRotationCompound TrinityCore::parseRotation(const std::string& json) {
 
     return compound;
 }
+#endif // TRINITY_HAS_MYSQL
