@@ -385,9 +385,9 @@ AcDbDatabase* TrinityBuildEngine::buildDetail(const TrinityNeuron& detail) {
 
     pMs2->close();
 
-    // ВАЖНО (фикс «висячих» *.dwl / *.dwl2): wblock() выставляет у чистой базы
-    // флаг "editing" — без close()/saveAs() блокировка не снимается.
-    cleanDb->discardEditing();
+    // ВАЖНО: у AcDbDatabase нет discardEditing()/close() (это методы AcDbObject,
+    // см. dbmain.h). Флаг "editing" side-database блокировок *.dwl/*.dwl2 не
+    // создаёт; saveAs()/delete корректно освобождают ресурсы базы.
 
     // Финальный отчёт
     /*
@@ -458,9 +458,9 @@ AcDbDatabase* TrinityBuildEngine::buildDwg(const TrinityNeuron& neuron, int dept
         return nullptr;
     }
 
-    // ВАЖНО (фикс «висячих» *.dwl / *.dwl2): wblock() выставляет у новой базы
-    // флаг "editing" — без close()/saveAs() блокировка не снимается.
-    cleanDb->discardEditing();
+    // ВАЖНО: у AcDbDatabase нет discardEditing()/close() (см. dbmain.h).
+    // Side-database из wblock() не создаёт *.dwl/*.dwl2 — блокировку снимает
+    // saveDwg() (freeThreadedData) либо деструктор при delete.
 
     return cleanDb;
 }

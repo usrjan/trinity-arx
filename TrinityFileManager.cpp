@@ -36,17 +36,23 @@ bool TrinityFileManager::saveDwg(AcDbDatabase* db, const std::string& path) {
 
     // ВАЖНО (фикс «висячих» *.dwl / *.dwl2): saveAs() только пишет файл —
     // он НЕ сбрасывает флаг "editing" и НЕ снимает блокировку DWG. Пока база
-    // не закрыта через close(), AutoCAD считает её редактируемой и держит
-    // lock-файлы. Раньше этот вызов делался в attachXref, теперь база здесь
-    // не закрывается (её жизненным циклом владеет вызывающий код), поэтому
-    // снимаем блокировку явно: discardEditing + unsetOwner + closeDwgFile.
-    // Все три операции идемпотентны и безопасны для side-database
-    // (unsetOwner возвращает eNotCurrentDatabase без побочных эффектов).
-    db->discardEditing();
-    db->unsetOwner();
-    es = db->closeDwgFile(AcDb::kCloseDiscardFromUndo);
-    if (es != Acad::eOk && es != Acad::eWasOpenForUndo && es != Acad::eNotThatKind) {
-        acutPrintf(_T("\n[FileManager] closeDwgFile after save failed: %s (error %d)\n"), pathW, es);
+    // считается редактируемой, AutoCAD держит lock-файлы.
+    //
+    // Реальный API ObjectARX (dbmain.h): у AcDbDatabase НЕТ методов
+    // discardEditing()/unsetOwner()/closeDwgFile() — это методы AcDbObject /
+    // редактора, а не базы. Правильный способ закрыть базу-документ —
+    // freeThreadedData() (безопасен в любом потоке, в отличие от close()).
+    //
+    // Вызывающий код (ensureFileExists) после saveDwg делает delete db,
+    // поэтому здесь закрываем блокировку ДО удаления:
+    //   - если база стала текущим документом (saveAs мог зарегистрировать
+    //     её в аксе), freeThreadedData() снимает ownership и закрывает
+    //     DWG-ресурс вместе с *.dwl/*.dwl2;
+    //   - если база не являлась документом, freeThreadedData() вернёт
+    //     ошибку без побочных эффектов — блокировок она не держала.
+    es = db->freeThreadedData();
+    if (es != Acad::eOk) {
+        acutPrintf(_T("\n[FileManager] freeThreadedData after save failed: %s (error %d)\n"), pathW, es);
     }
 
     //acutPrintf(_T("\n[FileManager] Saved: %s\n"), pathW);
@@ -137,20 +143,15 @@ AcDbObjectId TrinityFileManager::attachXref(
     // Шаг 2: Если блока нет — читаем файл и вставляем
     if (blockId == AcDbObjectId::kNull) {
         AcDbDatabase* pXrefDb = new AcDbDatabase(Adesk::kTrue, Adesk::kTrue);
-        es = pXrefDb->readDwgFile(pathW);
+        // kOpenReadOnly — читаем без захвата на запись: не создаются *.dwl/*.dwl2
+        es = pXrefDb->readDwgFile(pathW, AcDbDatabase::kOpenReadOnly);
 
-        // ВАЖНО (фикс «висячих» *.dwl / *.dwl2): readDwgFile() выставляет
-        // флаг "editing" и создаёт lock-файлы прочитанного DWG. Пока база не
-        // закрыта через close(), блокировка висит. Закрываем её СРАЗУ после
-        // чтения — close() только освобождает ресурс базы от имени AutoCAD,
-        // объект AcDbDatabase остаётся валидным для insert(). При неудачной
-        // вставке объект удаляем ourselves (ветка delete ниже), поэтому
-        // setOwner здесь не нужен.
+        // ВАЖНО (фикс «висячих» *.dwl / *.dwl2): readDwgFile(..., kOpenReadOnly)
+        // открывает файл без захвата записи — блокировки не создаются.
+        // У AcDbDatabase нет метода close() (это метод AcDbObject, см. dbmain.h),
+        // поэтому вместо него — корректный флаг доступа + delete (деструктор
+        // сам освобождает все ресурсы базы).
         if (es == Acad::eOk) {
-            Acad::ErrorStatus esClose = pXrefDb->close();
-            if (esClose != Acad::eOk) {
-                acutPrintf(_T("\n[FileManager] close xref db failed: %s (error %d)\n"), pathW, esClose);
-            }
             es = targetDb->insert(blockId, nameW, pXrefDb, true);
             wasInserted = (es == Acad::eOk);
         }
