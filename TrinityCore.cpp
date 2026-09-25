@@ -4,6 +4,30 @@
 #include <ctime>   // time_t / time() — троттлинг mysql_ping в ensureConnected()
 
 // ============================================
+// БЕЗОПАСНЫЕ УТИЛИТЫ (общие для обоих режимов сборки)
+// ============================================
+namespace {
+    // NULL-безопасное преобразование MYSQL_ROW[i] -> std::string.
+    // В MySQL_ROW колонки могут быть NULL (например, JSON_UNQUOTE от
+    // отсутствующего поля JSON или NULL из COALESCE-обходных путей).
+    // Конструкция вида std::string s = row[3]; без проверки — гарантированное
+    // обращение к nullptr и AV (падение AutoCAD).
+    std::string colStr(const char* cell, const char* fallback = "") {
+        return cell ? std::string(cell) : std::string(fallback);
+    }
+
+    // wide -> UTF-8 (для вывода путей в консоль AutoCAD через %hs)
+    std::string wideToUtf8(const wchar_t* w) {
+        if (!w || !*w) return "";
+        int need = WideCharToMultiByte(CP_UTF8, 0, w, -1, nullptr, 0, nullptr, nullptr);
+        if (need <= 0) return "";
+        std::string out(need - 1, '\0');
+        WideCharToMultiByte(CP_UTF8, 0, w, -1, &out[0], need, nullptr, nullptr);
+        return out;
+    }
+}
+
+// ============================================
 // СБОРКА БЕЗ MYSQL CLIENT (mysql.h не найден)
 // ============================================
 // Если на машине разработки нет клиентской библиотеки MySQL, StdAfx.h
@@ -13,6 +37,30 @@
 // Установите Connector/C ZIP и укажите путь MysqlIncludeDir в vcxproj,
 // чтобы включить реальный доступ к базе.
 #if !defined(TRINITY_HAS_MYSQL) || (TRINITY_HAS_MYSQL == 0)
+
+// libmysql.dll инициализируется ЛЕНИВО, при первом обращении к БД (см.
+// TrinityCore::connect в полной реализации ниже), а НЕ при загрузке .arx:
+//  - если библиотека не найдена — плагин всё равно загружается в AutoCAD,
+//    а пользователь получает понятное сообщение вместо падения;
+//  - поиск идёт сначала в папке самого модуля (.arx), затем по PATH.
+static HMODULE loadLibMysql() {
+    wchar_t modPath[MAX_PATH] = {0};
+    HMODULE self = nullptr;
+    if (GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS |
+                           GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+                           reinterpret_cast<LPCWSTR>(&loadLibMysql), &self) &&
+        GetModuleFileNameW(self, modPath, MAX_PATH)) {
+        std::wstring dir(modPath);
+        size_t slash = dir.find_last_of(L"\\/");
+        if (slash != std::wstring::npos) {
+            dir = dir.substr(0, slash + 1) + L"libmysql.dll";
+            SetDllDirectoryW(L""); // сбросить влияние предыдущих SetDllDirectory
+            HMODULE h = LoadLibraryExW(dir.c_str(), nullptr, LOAD_WITH_ALTERED_SEARCH_PATH);
+            if (h) return h;
+        }
+    }
+    return LoadLibraryW(L"libmysql.dll"); // стандартный поиск: PATH и т.д.
+}
 
 namespace {
     void warnNoMysql() {
@@ -68,6 +116,39 @@ TrinitySynapse TrinityCore::parseSynapseRow(MYSQL_ROW) { return {}; }
 TrinityCore::~TrinityCore() { disconnect(); }
 
 // ============================================
+// ЛЕНИВАЯ ИНИЦИАЛИЗАЦИЯ libmysql.dll (режим с mysql.h)
+// ============================================
+// Если заголовки найдены, но сам DLL отсутствует/битый/не той разрядности,
+// отложенная загрузка (delay-load) превращает первый вызов mysql_* в
+// структурное исключение SEH 0xC000027D — AutoCAD падает СРАЗУ после
+// запроса к базе без какого-либо сообщения. Поэтому при первом connect()
+// проверяем наличие библиотеки явно; поиск: сначала папка самого .arx,
+// затем стандартный (PATH и т.д.).
+static HMODULE loadLibMysql() {
+    static HMODULE s_h = nullptr;
+    static bool    s_tried = false;
+    if (s_tried) return s_h;
+    s_tried = true;
+
+    wchar_t modPath[MAX_PATH] = {0};
+    HMODULE self = nullptr;
+    if (GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS |
+                           GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+                           reinterpret_cast<LPCWSTR>(&loadLibMysql), &self) &&
+        GetModuleFileNameW(self, modPath, MAX_PATH)) {
+        std::wstring dir(modPath);
+        size_t slash = dir.find_last_of(L"\\/");
+        if (slash != std::wstring::npos) {
+            dir = dir.substr(0, slash + 1) + L"libmysql.dll";
+            s_h = LoadLibraryExW(dir.c_str(), nullptr, LOAD_WITH_ALTERED_SEARCH_PATH);
+            if (s_h) return s_h;
+        }
+    }
+    s_h = LoadLibraryW(L"libmysql.dll");
+    return s_h;
+}
+
+// ============================================
 // КОНСТАНТЫ ПЕРЕПОДКЛЮЧЕНИЯ
 // ============================================
 namespace {
@@ -107,11 +188,22 @@ bool TrinityCore::connect(const char* host, const char* user,
                            const char* pass, const char* db) {
     if (m_connected) return true;
 
-    // Сохраняем параметры — они понадобятся для автоматического переподключения
+    // Сохраняем параметры ДО любых проверок: даже если сейчас libmysql
+    // недоступна, reconnect()/ensureConnected() смогут корректно работать
+    // по этим данным после восстановления.
     m_host = host ? host : "";
     m_user = user ? user : "";
     m_pass = pass ? pass : "";
     m_db   = db   ? db   : "";
+
+    // Явная проверка наличия libmysql.dll ДО первого вызова mysql_* —
+    // иначе отсутствующая библиотека даёт молчаливое падение AutoCAD.
+    if (!loadLibMysql()) {
+        acutPrintf(_T("\n[TrinityCore] ERROR: libmysql.dll not found.\n"));
+        acutPrintf(_T("[TrinityCore] Copy libmysql.dll (x64, from MySQL Connector/C 8.0)\n"));
+        acutPrintf(_T("[TrinityCore] next to the .arx file or into a PATH folder, then retry.\n"));
+        return false;
+    }
 
     m_mysql = mysql_init(nullptr);
     if (!m_mysql) {
@@ -160,17 +252,22 @@ void TrinityCore::disconnect() {
 // параметрами. Между попытками — пауза (сервер мог перезапускаться).
 // ============================================
 bool TrinityCore::reconnect(int maxAttempts, unsigned delayMs) {
+    // Соединение ещё не устанавливалось — переподключаться не к чему
+    // (и libmysql может быть недоступна — не трогаем её вовсе).
+    if (m_host.empty()) {
+        return false;
+    }
+    if (!loadLibMysql()) {
+        acutPrintf(_T("\n[TrinityCore] ERROR: libmysql.dll not found - cannot reconnect.\n"));
+        return false;
+    }
+
     // Отбрасываем прежнее соединение полностью
     if (m_mysql) {
         mysql_close(m_mysql);
         m_mysql = nullptr;
     }
     m_connected = false;
-
-    if (m_host.empty()) {
-        // connect() ещё ни разу не вызывался — переподключаться не к чему
-        return false;
-    }
 
     for (int attempt = 1; attempt <= maxAttempts; ++attempt) {
         acutPrintf(_T("\n[TrinityCore] Reconnecting to MySQL (attempt %d/%d)...\n"),
@@ -309,6 +406,26 @@ std::string TrinityCore::escapeSqlLiteral(const std::string& value, bool emptyMe
     return result;
 }
 
+// ============================================================
+// ПРОВЕРКА ЦЕЛОСТНОСТИ СТРОКИ НЕЙРОНА (защита от падения AutoCAD)
+// ============================================================
+namespace {
+    // Пустой code критичен: ensureExists/deleteProjectFiles с пустым кодом
+    // зацикливаются рекурсивно по детям -> стек переполняется и AutoCAD
+    // падает без сообщения. Строку с пустым кодом выбрасываем с логом.
+    bool isUsableNeuron(const TrinityNeuron& n, const wchar_t* ctx) {
+        if (n.code.empty()) {
+            acutPrintf(_T("\n[TrinityCore] SKIP neuron id=%d in %ls: empty code (check data->'$.code' in DB)\n"),
+                       n.id, ctx);
+            return false;
+        }
+        return true;
+    }
+
+    // Колонка type не должна быть NULL/пустой — иначе ветвление detail/assembly
+    // уходит в «projects» молча; логируем, но не выбрасываем строку.
+}
+
 // ============================================
 // ЗАГРУЗКА НЕЙРОНА ПО КОДУ
 // ============================================
@@ -340,6 +457,10 @@ TrinityNeuron* TrinityCore::loadNeuronByCode(const std::string& code) {
     MYSQL_ROW row = mysql_fetch_row(result);
     TrinityNeuron* neuron = new TrinityNeuron(parseNeuronRow(row));
     mysql_free_result(result);
+    if (!isUsableNeuron(*neuron, L"loadNeuronByCode")) {
+        delete neuron;
+        return nullptr;
+    }
     return neuron;
 }
 
@@ -371,6 +492,10 @@ TrinityNeuron* TrinityCore::loadNeuronById(int id) {
     MYSQL_ROW row = mysql_fetch_row(result);
     TrinityNeuron* neuron = new TrinityNeuron(parseNeuronRow(row));
     mysql_free_result(result);
+    if (!isUsableNeuron(*neuron, L"loadNeuronById")) {
+        delete neuron;
+        return nullptr;
+    }
     return neuron;
 }
 
@@ -398,7 +523,16 @@ std::vector<TrinitySynapse> TrinityCore::loadChildren(int parentId) {
 
     MYSQL_ROW row;
     while ((row = mysql_fetch_row(result))) {
-        children.push_back(parseSynapseRow(row));
+        TrinitySynapse syn = parseSynapseRow(row);
+        // Пустой childCode -> рекурсия deleteProjectFiles/ensureFileExists
+        // уходит по «пустым» детям и зацикливается (стек переполняется,
+        // AutoCAD падает). Такой синапс пропускаем с логом.
+        if (syn.childCode.empty()) {
+            acutPrintf(_T("\n[TrinityCore] SKIP synapse id=%d (parent=%d): empty child code\n"),
+                       syn.id, syn.parentId);
+            continue;
+        }
+        children.push_back(syn);
     }
 
     mysql_free_result(result);
@@ -434,7 +568,10 @@ std::vector<TrinityNeuron> TrinityCore::loadPendingProjects() {
 
     MYSQL_ROW row;
     while ((row = mysql_fetch_row(result))) {
-        projects.push_back(parseNeuronRow(row));
+        TrinityNeuron proj = parseNeuronRow(row);
+        if (!isUsableNeuron(proj, L"loadPendingProjects"))
+            continue;
+        projects.push_back(proj);
     }
 
     mysql_free_result(result);
@@ -460,13 +597,17 @@ bool TrinityCore::markNeuronDone(int id) {
 // ============================================
 TrinityNeuron TrinityCore::parseNeuronRow(MYSQL_ROW row) {
     TrinityNeuron n;
-    n.id = row[0] ? atoi(row[0]) : 0;
-    n.code = row[1] ? row[1] : "";
-    n.type = row[2] ? row[2] : "";
-    n.category = row[3] ? row[3] : "";
-    n.material = row[4] ? row[4] : "PLYWOOD-FSF";
-    n.status = row[5] ? row[5] : "";
-    n.jsonData = row[6] ? row[6] : "";
+    if (!row) return n;
+    // ВАЖНО: любая колонка может быть NULL (например, JSON_UNQUOTE возвращает
+    // NULL, если в data нет поля $.code / $.status). Прямое row[i] -> std::string
+    // на NULL = обращение к nullptr = Access Violation и падение AutoCAD.
+    n.id       = row[0] ? atoi(row[0]) : 0;
+    n.code     = colStr(row[1]);
+    n.type     = colStr(row[2]);
+    n.category = colStr(row[3]);
+    n.material = row[4] ? std::string(row[4]) : "PLYWOOD-FSF";
+    n.status   = colStr(row[5]);
+    n.jsonData = colStr(row[6]);
 
     // Парсим код: D.S.0.425.850.10
     if (!n.code.empty()) {
@@ -482,10 +623,11 @@ TrinityNeuron TrinityCore::parseNeuronRow(MYSQL_ROW row) {
 // ============================================
 TrinitySynapse TrinityCore::parseSynapseRow(MYSQL_ROW row) {
     TrinitySynapse s;
-    s.id = row[0] ? atoi(row[0]) : 0;
+    if (!row) return s;
+    s.id       = row[0] ? atoi(row[0]) : 0;
     s.parentId = row[1] ? atoi(row[1]) : 0;
-    s.childId = row[2] ? atoi(row[2]) : 0;
-    s.childCode = row[3] ? row[3] : "";
+    s.childId  = row[2] ? atoi(row[2]) : 0;
+    s.childCode = colStr(row[3]);
 
     if (row[4]) {
         std::string json(row[4]);
