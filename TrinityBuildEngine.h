@@ -9,6 +9,23 @@ private:
     TrinityCore m_core;
     TrinityFileManager m_files;
 
+    // Кэш путей к DWG-файлам, построенным в ТЕКУЩЕМ проходе сборки.
+    // Нужен, чтобы один и тот же файл (например D.S.2.425.425.10.dwg)
+    // не сохранялся повторно через saveAs() во время обхода дерева:
+    // повторно открытый AcDbDatabase держит файл на диске заблокированным,
+    // повторный saveAs() завершается ошибкой, файл остаётся битым и
+    // последующая вставка XREF падает (error 320 / eNullEntityHandle).
+    std::map<std::string, std::string> m_builtPaths;
+
+    // Очистка кэша построенных файлов (вызывается в начале каждого прохода)
+    void resetBuildCache() { m_builtPaths.clear(); }
+
+    // Путь к файлу нейрона по коду (кэш / диск). Пустая строка, если файла нет.
+    // Используется для повторных экземпляров одного ребёнка в buildDwg,
+    // чтобы НЕ вызывать ensureFileExists повторно (иначе возможен повторный
+    // saveAs() уже заблокированного файла).
+    std::string getExistingFilePath(const std::string& code);
+
     // Рекурсивное обеспечение существования DWG
     // Если файл есть — вставляет XREF и возвращает его ID
     // Если файла нет — строит его и потом вставляет XREF
@@ -27,7 +44,8 @@ private:
 
     // Построить DWG детали (конечный уровень)
     // Геометрия → временная база → wblock → чистая база
-    AcDbDatabase* buildDetail(const TrinityNeuron& detail);
+    // outBuiltId: id нейрона-детали (для пометки "done" после вставки XREF)
+    AcDbDatabase* buildDetail(const TrinityNeuron& detail, int* outBuiltId = nullptr);
 
     // Обеспечить существование файла детали/конструкции
     // Без вставки XREF. Возвращает путь к файлу.

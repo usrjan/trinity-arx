@@ -10,23 +10,35 @@ UINT_PTR g_timerId = 0;
 // CALLBACK ТАЙМЕРА
 // ============================================
 void CALLBACK TimerProc(HWND, UINT, UINT_PTR, DWORD) {
-    trinityProcess();
+    // Защита от реентерабельности: если предыдущий тик ещё выполняется
+    // (или завис в базе/файловой системе), новый тик пропускается.
+    // Без этого processAllProjects() мог вызываться повторно из своего же
+    // стека (например через acedUpdateDisplay), что приводило к повторной
+    // вставке XREF и падению AutoCAD.
+    // Флаг — обычный long с атомарными операциями InterlockedXxx:
+    // реентерабельность таймера в AutoCAD (вложенная обработка сообщений)
+    // защищается корректно и без исключений C++ внутри SEF-блока.
+    static long g_isProcessing = 0;
+    if (InterlockedCompareExchange(&g_isProcessing, 1, 0) != 0) return;
+
+    __try {
+        trinityProcess();
+    }
+    __finally {
+        InterlockedExchange(&g_isProcessing, 0);
+    }
 }
 
 // ============================================
 // TRINITY_START — запуск таймера
 // ============================================
 void trinityStart() {
-    // Если таймер уже запущен — сначала останавливаем его
-    if (g_timerId != 0) {
-        acutPrintf(_T("\n[Trinity] Timer already running. Restarting...\n"));
+    // Полный сброс предыдущего состояния (таймер + движок).
+    // trinityStop() идемпотентен: корректно работает и при g_timerId == 0,
+    // и при g_engine == nullptr.
+    if (g_timerId != 0 || g_engine) {
+        acutPrintf(_T("\n[Trinity] Restarting...\n"));
         trinityStop();
-    }
-
-    // Очищаем глобальный указатель на движок
-    if (g_engine) {
-        delete g_engine;
-        g_engine = nullptr;
     }
 
     // Загружаем настройки из trinity.ini в папке библиотеки

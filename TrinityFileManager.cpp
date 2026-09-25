@@ -53,6 +53,30 @@ AcDbObjectId TrinityFileManager::attachXref(
         return AcDbObjectId::kNull;
     }
 
+    // DWG короче ~512 байт — почти наверняка битый (недописанный) файл:
+    // такое бывает, если saveAs() прервался на заблокированном файле.
+    // readDwgFile() на мусоре может повредить базу-приёмник, поэтому
+    // такую вставку отклоняем сразу.
+    {
+        struct _stati64 st;
+        if (_wstati64(pathW, &st) == 0 && st.st_size < 512) {
+            acutPrintf(_T("\n[FileManager] File too small (corrupt?), skip: %s (%lld bytes)\n"),
+                       pathW, (__int64)st.st_size);
+            return AcDbObjectId::kNull;
+        }
+    }
+
+    // Имена блоков-XREF не должны содержать символы, недопустимые для
+    // имён символов AutoCAD ('<', '>', '/', '\\', '"', ':', ';', '|', '=', ','),
+    // иначе insert() возвращает eInvalidName и вставка молча срывается.
+    for (wchar_t* pch = nameW; *pch; ++pch) {
+        const wchar_t c = *pch;
+        if (c == L'<' || c == L'>' || c == L'/' || c == L'\\' || c == L'"' ||
+            c == L':' || c == L';' || c == L'|' || c == L'=' || c == L',') {
+            *pch = L'$';
+        }
+    }
+
     AcDbObjectId blockId = AcDbObjectId::kNull;
     bool wasInserted = false;
 
@@ -120,30 +144,35 @@ AcDbObjectId TrinityFileManager::attachXref(
 
     // Шаг 2: Если блока нет — читаем файл и вставляем
     if (blockId == AcDbObjectId::kNull) {
-        AcDbDatabase* pXrefDb = new AcDbDatabase(Adesk::kTrue, Adesk::kTrue);
-        es = pXrefDb->readDwgFile(pathW);
-
-        if (es == Acad::eOk) {
-            es = targetDb->insert(blockId, nameW, pXrefDb, true);
-            wasInserted = (es == Acad::eOk);
-        }
-        delete pXrefDb;
-
-        // Шаг 3: ОБРАБОТКА РЕЗУЛЬТАТА
-        if (es == Acad::eDuplicateKey) {
-            // Блок уже есть (гонка или скрытый блок) — получаем его ID
-            AcDbBlockTable* pBt = nullptr;
-            targetDb->getSymbolTable(pBt, AcDb::kForRead);
-            if (pBt->has(nameW)) {
-                pBt->getAt(nameW, blockId);
-            }
-            pBt->close();
-            wasInserted = true;
-        }
-        else if (es != Acad::eOk) {
-            acutPrintf(_T("\n[FileManager] Insert failed (error %d)\n"), es);
+        AcDbDatabase* pXrefDb = new AcDbDatabase(false, true);
+        es = pXrefDb->readDwgFile(pathW, AcDbDatabase::kForReadAndReadShare, false, nullptr);
+        if (es != Acad::eOk) {
+            acutPrintf(_T("\n[FileManager] readDwgFile failed: %s (error %d)\n"), pathW, es);
+            delete pXrefDb;
             return AcDbObjectId::kNull;
         }
+
+        Acad::ErrorStatus esIns = targetDb->insert(blockId, nameW, pXrefDb, true);
+        delete pXrefDb;   // при успешном insert() база становится owning для record-а
+
+        if (esIns == Acad::eDuplicateKey) {
+            // Блок уже есть (гонка или скрытый блок) — получаем его ID
+            blockId = AcDbObjectId::kNull;
+            AcDbBlockTable* pBt = nullptr;
+            if (targetDb->getSymbolTable(pBt, AcDb::kForRead) == Acad::eOk && pBt) {
+                if (pBt->has(nameW)) {
+                    pBt->getAt(nameW, blockId);
+                }
+                pBt->close();
+            }
+            esIns = (blockId != AcDbObjectId::kNull) ? Acad::eOk : Acad::eDuplicateKey;
+        }
+
+        if (esIns != Acad::eOk) {
+            acutPrintf(_T("\n[FileManager] Insert failed (error %d)\n"), esIns);
+            return AcDbObjectId::kNull;
+        }
+        wasInserted = true;
     }
 
     if (blockId == AcDbObjectId::kNull) {
