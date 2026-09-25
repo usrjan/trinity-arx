@@ -3,28 +3,6 @@
 #include "StdAfx.h"
 
 // ============================================
-// MySQL C API — используется ТОЛЬКО стабильный публичный C API libmysql
-// (идентичен в Connector/C 5.7 и 8.x): mysql_init / mysql_options /
-// mysql_real_connect / mysql_close / mysql_ping / mysql_query /
-// mysql_store_result / mysql_fetch_row / mysql_free_result / mysql_num_rows /
-// mysql_errno / mysql_error / mysql_real_escape_string / mysql_set_character_set.
-// my_bool и MYSQL_OPT_RECONNECT НЕ используются (в Connector/C 8.0 удалены).
-// Заголовок mysql.h подключается в StdAfx.h; если он не найден — определяется
-// TRINITY_HAS_MYSQL = 0, и TrinityCore.cpp собирается в режим-заглушку
-// (доступ к БД отключён, плагин работает без MySQL-библиотек).
-// ============================================
-#ifndef TRINITY_HAS_MYSQL
-#define TRINITY_HAS_MYSQL 1
-#endif
-
-// Если MySQL client недоступен, объявляем минимальные заглушки типов,
-// чтобы заголовок компилировался в любом случае (реализации — под #if в .cpp).
-#if !defined(TRINITY_HAS_MYSQL) || (TRINITY_HAS_MYSQL == 0)
-struct MYSQL {};
-typedef char** MYSQL_ROW;
-#endif
-
-// ============================================
 // ПОЗИЦИЯ
 // ============================================
 struct TrinityPosition {
@@ -86,20 +64,6 @@ struct TrinitySynapse {
 class TrinityCore {
     MYSQL* m_mysql = nullptr;
     bool m_connected = false;
-
-    // Повторное подключение с повторами (вызывается при обрыве соединения)
-    bool reconnect(int maxAttempts = 3, unsigned delayMs = 500);
-
-    // Проверка живости соединения (mysql_ping, не чаще раза в MIN_PING_INTERVAL_S)
-    // с автоматическим переподключением. Вызывается перед каждым запросом.
-    bool ensureConnected();
-
-    // Параметры последнего успешного подключения — используются для переподключения
-    std::string m_host, m_user, m_pass, m_db;
-
-    // Восстановление соединения после ошибки обрыва в середине запроса:
-    // переподключение + повторная отправка того же SQL. true — запрос выполнен успешно.
-    bool recoverQuery(const char* query);
 
 public:
     TrinityCore() = default;

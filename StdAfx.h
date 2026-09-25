@@ -7,50 +7,10 @@
 #include <windows.h>
 #include <tchar.h>
 
-// Стандартные типы, необходимые уже в этом заголовке (stringToWide) и всем,
-// кто его включает: на MSDN-сборке пробрасывались через цепочку mysql.h,
-// теперь подключаются явно — независимая от MySQL корректная компиляция.
-#include <string>
-#include <vector>
-
 // ============================================
-// MySQL — C API (клиентская библиотека)
+// MySQL
 // ============================================
-// ВАЖНО: этот плагин (ARX/.dll) сам по себе работает и БЕЗ MySQL-библиотек —
-// они нужны только для компиляции модуля работы с базой (TrinityCore.cpp).
-// Если заголовки mysql.h не найдены, код ниже НЕ будет выдавать ошибку:
-// вместо этого определится TRINITY_HAS_MYSQL=0, и все обращения к БД
-// безопасно отключатся (функции вернут «нет подключения»). Плагин соберётся
-// и заработает; чтобы включить базу — укажите путь к include/lib клиентской
-// библиотеки в Trinity.vcxproj (MysqlIncludeDir/MysqlLibDir) или установите
-// MySQL Connector/C ZIP (сервер MySQL ставить на эту машину НЕ нужно —
-// он работает на 192.168.30.5).
-//
-// Как найти mysql.h автоматически: если задана переменная окружения
-// MYSQL_INCLUDE_DIR (MSVC раскрывает её как $(MYSQL_INCLUDE_DIR)), она уже
-// добавлена в пути компилятора через vcxproj. Дополнительно пробуем
-// стандартные расположения.
-#ifdef TRINITY_HAS_MYSQL
-#undef TRINITY_HAS_MYSQL
-#endif
-#if defined(__has_include)
-#  if __has_include(<mysql.h>)
-#    include <mysql.h>
-#    define TRINITY_HAS_MYSQL 1
-#  elif __has_include(<mysql/mysql.h>)
-#    include <mysql/mysql.h>
-#    define TRINITY_HAS_MYSQL 1
-#  else
-#    define TRINITY_HAS_MYSQL 0
-#    pragma message("StdAfx.h: mysql.h not found - building WITHOUT MySQL support. \
-Set MysqlIncludeDir in Trinity.vcxproj (or env MYSQL_INCLUDE_DIR) and rebuild to enable DB access.")
-#  endif
-#else
-// Старый компилятор без __has_include: пробуем напрямую; если не найдётся —
-// получите C1083, тогда добавьте путь к include в свойства проекта.
-#  include <mysql.h>
-#  define TRINITY_HAS_MYSQL 1
-#endif
+#include <mysql.h>
 
 // ============================================
 // AutoCAD ObjectARX 2026 — Основные
