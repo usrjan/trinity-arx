@@ -29,12 +29,28 @@ bool TrinityFileManager::saveDwg(AcDbDatabase* db, const std::string& path) {
     MultiByteToWideChar(CP_UTF8, 0, path.c_str(), -1, pathW, 512);
 
     Acad::ErrorStatus es = db->saveAs(pathW);
-    if (es == Acad::eOk) {
-        //acutPrintf(_T("\n[FileManager] Saved: %s\n"), pathW);
-        return true;
+    if (es != Acad::eOk) {
+        acutPrintf(_T("\n[FileManager] Save failed: %s (error %d)\n"), pathW, es);
+        return false;
     }
-    acutPrintf(_T("\n[FileManager] Save failed: %s (error %d)\n"), pathW, es);
-    return false;
+
+    // ВАЖНО (фикс «висячих» *.dwl / *.dwl2): saveAs() только пишет файл —
+    // он НЕ сбрасывает флаг "editing" и НЕ снимает блокировку DWG. Пока база
+    // не закрыта через close(), AutoCAD считает её редактируемой и держит
+    // lock-файлы. Раньше этот вызов делался в attachXref, теперь база здесь
+    // не закрывается (её жизненным циклом владеет вызывающий код), поэтому
+    // снимаем блокировку явно: discardEditing + unsetOwner + closeDwgFile.
+    // Все три операции идемпотентны и безопасны для side-database
+    // (unsetOwner возвращает eNotCurrentDatabase без побочных эффектов).
+    db->discardEditing();
+    db->unsetOwner();
+    es = db->closeDwgFile(AcDb::kCloseDiscardFromUndo);
+    if (es != Acad::eOk && es != Acad::eWasOpenForUndo && es != Acad::eNotThatKind) {
+        acutPrintf(_T("\n[FileManager] closeDwgFile after save failed: %s (error %d)\n"), pathW, es);
+    }
+
+    //acutPrintf(_T("\n[FileManager] Saved: %s\n"), pathW);
+    return true;
 }
 
 AcDbObjectId TrinityFileManager::attachXref(
@@ -123,7 +139,18 @@ AcDbObjectId TrinityFileManager::attachXref(
         AcDbDatabase* pXrefDb = new AcDbDatabase(Adesk::kTrue, Adesk::kTrue);
         es = pXrefDb->readDwgFile(pathW);
 
+        // ВАЖНО (фикс «висячих» *.dwl / *.dwl2): readDwgFile() выставляет
+        // флаг "editing" и создаёт lock-файлы прочитанного DWG. Пока база не
+        // закрыта через close(), блокировка висит. Закрываем её СРАЗУ после
+        // чтения — close() только освобождает ресурс базы от имени AutoCAD,
+        // объект AcDbDatabase остаётся валидным для insert(). При неудачной
+        // вставке объект удаляем ourselves (ветка delete ниже), поэтому
+        // setOwner здесь не нужен.
         if (es == Acad::eOk) {
+            Acad::ErrorStatus esClose = pXrefDb->close();
+            if (esClose != Acad::eOk) {
+                acutPrintf(_T("\n[FileManager] close xref db failed: %s (error %d)\n"), pathW, esClose);
+            }
             es = targetDb->insert(blockId, nameW, pXrefDb, true);
             wasInserted = (es == Acad::eOk);
         }
