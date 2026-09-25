@@ -6,7 +6,14 @@
 // РЕГИСТРАЦИЯ КОМАНД
 // ============================================
 void initApp() {
-    trinityRegisterCommands();
+    acedRegCmds->addCommand(_T("TRINITY_COMMANDS"),
+        _T("TSTART"), _T("TSTART"),
+        ACRX_CMD_MODAL, trinityStart);
+
+    acedRegCmds->addCommand(_T("TRINITY_COMMANDS"),
+        _T("TSTOP"), _T("TSTOP"),
+        ACRX_CMD_MODAL, trinityStop);
+
     acutPrintf(_T("\n[Trinity] Plugin loaded. TSTART / TSTOP\n"));
 }
 
@@ -14,7 +21,7 @@ void initApp() {
 // ВЫГРУЗКА
 // ============================================
 void unloadApp() {
-    trinityShutdown();   // остановить таймер и отключиться от БД
+    trinityStop();
     acedRegCmds->removeGroup(_T("TRINITY_COMMANDS"));
 }
 

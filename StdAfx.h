@@ -73,12 +73,7 @@
 #endif
 
 // ============================================
-// Утилиты (реализация в StdAfx.cpp)
+// Объявления утилит (реализация в StdAfx.cpp)
 // ============================================
-
-// UTF-8 -> UTF-16 (безопасные конвертеры, всегда завершают буфер)
-void  stringToWide(const std::string& str, wchar_t* out, size_t maxLen);
-std::wstring toWide(const std::string& utf8);
-
-// printf-обёртка с гарантией перевода строки в начале
-void trinityLog(const wchar_t* fmt, ...);
+void stringToWide(const std::string& str, wchar_t* out, size_t maxLen);
+wchar_t* utf2uni(const char* utf8_string);
