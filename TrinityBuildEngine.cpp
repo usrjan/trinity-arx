@@ -7,96 +7,6 @@
 #include <io.h>
 
 // ============================================================
-// ГЛАВНЫЙ РЕКУРСИВНЫЙ МЕТОД
-// ============================================================
-// Логика:
-//   1. Загружаем нейрон по коду
-//   2. Определяем подкаталог (details/assemblies/projects)
-//   3. Если файл есть — вставляем XREF и выходим
-//   4. Если файла нет:
-//      - для detail  → buildDetail
-//      - для assembly/construction/project → buildDwg
-//   5. Сохраняем DWG через saveDwg
-//   6. Вставляем XREF
-// ============================================================
-AcDbObjectId TrinityBuildEngine::ensureExists(const std::string& code,
-                                                const AcGePoint3d& position,
-                                                const TrinityRotationCompound& rotation,
-                                                AcDbDatabase* targetDb,
-                                                int depth) {
-    // Защита от бесконечной рекурсии
-    if (depth > 20) {
-        wchar_t* wCode = utf2uni(code.c_str());
-        acutPrintf(_T("\n[BuildEngine] MAX DEPTH reached for %s\n"), wCode);
-        free(wCode);
-        return AcDbObjectId::kNull;
-    }
-
-    // 1. Загружаем нейрон
-    TrinityNeuron* pNeuron = m_core.loadNeuronByCode(code);
-    if (!pNeuron) {
-        wchar_t* wCode = utf2uni(code.c_str());
-        acutPrintf(_T("\n[BuildEngine] Neuron not found: %s\n"), wCode);
-        free(wCode);
-        return AcDbObjectId::kNull;
-    }
-
-    TrinityNeuron neuron = *pNeuron;
-    delete pNeuron;
-
-    // 2. Определяем подкаталог
-    std::string subdir;
-    if (neuron.type == "detail") {
-        subdir = m_files.detailsDir();
-    } else if (neuron.type == "assembly" || neuron.type == "construction") {
-        subdir = m_files.assembliesDir();
-    } else {
-        subdir = m_files.projectsDir();
-    }
-
-    std::string filePath = m_files.getFilePath(neuron.code, subdir);
-
-    // 3. Если файл существует — вставляем XREF
-    if (m_files.fileExists(neuron.code, subdir)) {
-        wchar_t* wCode = utf2uni(neuron.code.c_str());
-        acutPrintf(_T("\n[BuildEngine] EXISTS: %s (depth=%d)\n"), wCode, depth);
-        free(wCode);
-
-        return m_files.attachXref(filePath, neuron.code, position, rotation, targetDb);
-    }
-
-    // 4. Файла нет — строим
-    wchar_t* wCode = utf2uni(neuron.code.c_str());
-    wchar_t* wType = utf2uni(neuron.type.c_str());
-    acutPrintf(_T("\n[BuildEngine] BUILDING: %s (type=%s, depth=%d)\n"),
-               wCode, wType, depth);
-    free(wCode);
-    free(wType);
-
-    AcDbDatabase* cleanDb = nullptr;
-
-    if (neuron.type == "detail") {
-        cleanDb = buildDetail(neuron);
-    } else {
-        cleanDb = buildDwg(neuron, depth);
-    }
-
-    if (!cleanDb) {
-        return AcDbObjectId::kNull;
-    }
-
-    // 5. Сохраняем
-    m_files.saveDwg(cleanDb, filePath);
-    delete cleanDb;
-
-    // Пауза для файловой системы
-    Sleep(200);
-
-    // 6. Вставляем XREF
-    return m_files.attachXref(filePath, neuron.code, position, rotation, targetDb);
-}
-
-// ============================================================
 // ПОСТРОЕНИЕ ДЕТАЛИ
 // ============================================================
 // Порядок:
@@ -133,9 +43,16 @@ AcDbDatabase* TrinityBuildEngine::buildDetail(const TrinityNeuron& detail) {
 
     // Получаем Model Space
     AcDbBlockTable* pBt = nullptr;
-    tempDb->getSymbolTable(pBt, AcDb::kForRead);
+    if (tempDb->getSymbolTable(pBt, AcDb::kForRead) != Acad::eOk) {
+        delete tempDb;
+        return nullptr;
+    }
     AcDbBlockTableRecord* pMs = nullptr;
-    pBt->getAt(ACDB_MODEL_SPACE, pMs, AcDb::kForWrite);
+    if (pBt->getAt(ACDB_MODEL_SPACE, pMs, AcDb::kForWrite) != Acad::eOk) {
+        pBt->close();
+        delete tempDb;
+        return nullptr;
+    }
     pBt->close();
 
     AcDbObjectIdArray ids;
@@ -235,8 +152,9 @@ AcDbDatabase* TrinityBuildEngine::buildDetail(const TrinityNeuron& detail) {
     Acad::ErrorStatus es = tempDb->wblock(cleanDb, ids, AcGePoint3d::kOrigin);
     delete tempDb;
 
+    // При ошибке wblock гарантированно возвращает nullptr в cleanDb —
+    // повторное delete было бы двойным освобождением
     if (es != Acad::eOk || !cleanDb) {
-        delete cleanDb;
         return nullptr;
     }
 
@@ -255,35 +173,39 @@ AcDbDatabase* TrinityBuildEngine::buildDetail(const TrinityNeuron& detail) {
     // ПЕРЕНАЗНАЧАЕМ СЛОИ ОБЪЕКТАМ
     // ============================================================
     AcDbBlockTable* pBt2 = nullptr;
-    cleanDb->getSymbolTable(pBt2, AcDb::kForRead);
-    AcDbBlockTableRecord* pMs2 = nullptr;
-    pBt2->getAt(ACDB_MODEL_SPACE, pMs2, AcDb::kForWrite);
-    pBt2->close();
+    if (cleanDb->getSymbolTable(pBt2, AcDb::kForRead) == Acad::eOk) {
+        AcDbBlockTableRecord* pMs2 = nullptr;
+        if (pBt2->getAt(ACDB_MODEL_SPACE, pMs2, AcDb::kForWrite) == Acad::eOk) {
+            pBt2->close();
 
-    AcDbBlockTableRecordIterator* pIter = nullptr;
-    pMs2->newIterator(pIter);
+            AcDbBlockTableRecordIterator* pIter = nullptr;
+            pMs2->newIterator(pIter);
 
-    if (pIter) {
-        wchar_t matLayerW[256];
-        MultiByteToWideChar(CP_UTF8, 0, layer.c_str(), -1, matLayerW, 256);
+            if (pIter) {
+                wchar_t matLayerW[256];
+                MultiByteToWideChar(CP_UTF8, 0, layer.c_str(), -1, matLayerW, 256);
 
-        for (pIter->start(); !pIter->done(); pIter->step()) {
-            AcDbEntity* pEnt = nullptr;
-            if (pIter->getEntity(pEnt, AcDb::kForWrite) == Acad::eOk && pEnt) {
-                if (pEnt->isKindOf(AcDb3dSolid::desc())) {
-                    pEnt->setLayer(matLayerW);        // солид → материал
-                } else if (pEnt->isKindOf(AcDbCircle::desc())) {
-                    pEnt->setLayer(_T("_bolt"));       // кружочек → _bolt
-                } else {
-                    pEnt->setLayer(_T("_tag"));        // атрибут → _tag
+                for (pIter->start(); !pIter->done(); pIter->step()) {
+                    AcDbEntity* pEnt = nullptr;
+                    if (pIter->getEntity(pEnt, AcDb::kForWrite) == Acad::eOk && pEnt) {
+                        if (pEnt->isKindOf(AcDb3dSolid::desc())) {
+                            pEnt->setLayer(matLayerW);       // солид → материал
+                        } else if (pEnt->isKindOf(AcDbCircle::desc())) {
+                            pEnt->setLayer(_T("_bolt"));     // кружочек → _bolt
+                        } else {
+                            pEnt->setLayer(_T("_tag"));      // атрибут → _tag
+                        }
+                        pEnt->close();
+                    }
                 }
-                pEnt->close();
+                delete pIter;
             }
-        }
-        delete pIter;
-    }
 
-    pMs2->close();
+            pMs2->close();
+        } else {
+            pBt2->close();
+        }
+    }
 
     // Финальный отчёт
     /*
@@ -370,8 +292,9 @@ AcDbDatabase* TrinityBuildEngine::buildDwg(const TrinityNeuron& neuron, int dept
     Acad::ErrorStatus es = tempDb->wblock(cleanDb, ids, AcGePoint3d::kOrigin);
     delete tempDb;
 
+    // При ошибке wblock гарантированно возвращает nullptr в cleanDb —
+    // повторное delete было бы двойным освобождением
     if (es != Acad::eOk || !cleanDb) {
-        delete cleanDb;
         return nullptr;
     }
 
@@ -513,4 +436,184 @@ void TrinityBuildEngine::deleteProjectFiles(const std::string& code) {
             deleteProjectFiles(syn.childCode);
         }
     }
+}
+// ============================================================
+// ОТРИСОВКА ДЕТАЛЕЙ КАТЕГОРИИ В ТЕКУЩИЙ ЧЕРТЕЖ (TRIB)
+// ============================================================
+// Для каждой детали:
+//   1. Блок TRIB_<code> в таблицу блоков чертежа (переиспользуется
+//      при повторном вызове — блок перезаписывается геометрией).
+//   2. Внутри блока: солид + маркеры болтов (для rib) + невидимый
+//      текст с кодом (для поиска).
+//   3. XDATA приложения TRINITY (REGAPPID): категория, код, материал,
+//      базовые Width/Height/Thickness — метаданные для панелей свойств.
+//   4. AcDbBlockReference в ModelSpace со стандартными параметрическими
+//      свойствами (Height/Width/Rotation/State) — видны в палитре
+//      "Свойства" как у обычного блока.
+// ============================================================
+int TrinityBuildEngine::drawDetailsInDrawing(AcDbDatabase* targetDb,
+                                             const std::string& category) {
+    if (!targetDb) return 0;
+
+    auto details = m_core.loadDetailsByCategory(category);
+    if (details.empty()) {
+        acutPrintf(_T("\n[Trinity] No '%hs' details found in database.\n"), category.c_str());
+        return 0;
+    }
+
+    // Регистрируем приложение для XDATA
+    {
+        resbuf* pRegApp = acutNewRb(AcDb::kDxfRegAppName);
+        wcscpy_s(pRegApp->resval.rstring, 256, L"TRINITY");
+        pRegApp->rbnext = nullptr;
+        AcDbRegAppTable* pRegApps = nullptr;
+        if (targetDb->getSymbolTable(pRegApps, AcDb::kForWrite) == Acad::eOk) {
+            if (!pRegApps->has(L"TRINITY"))
+                pRegApps->add(pRegApp);
+            pRegApps->close();
+        }
+        acutRelRb(pRegApp);
+    }
+
+    AcDbBlockTable* pBT = nullptr;
+    if (targetDb->getSymbolTable(pBT, AcDb::kForWrite) != Acad::eOk) return 0;
+
+    AcDbBlockTableRecord* pMS = nullptr;
+    if (pBT->getAt(ACDB_MODEL_SPACE, pMS, AcDb::kForWrite) != Acad::eOk) {
+        pBT->close();
+        return 0;
+    }
+
+    double yCursor = 0.0;               // раскладка деталей по Y
+    const double ROW_GAP = 80.0;
+    int inserted = 0;
+
+    for (const auto& d : details) {
+        if (d.width <= 0 || d.height <= 0 || d.thickness <= 0) continue;
+
+        // ---- имя блока ----
+        wchar_t blockName[256];
+        _snwprintf_s(blockName, 256, _T("TRIB_%hs"), d.code.c_str());
+
+        // ---- создать или очистить существующий блок ----
+        AcDbBlockTableRecord* pBtr = nullptr;
+        if (pBT->getAt(blockName, pBtr, AcDb::kForWrite) == Acad::eOk) {
+            // перезапись: удаляем старую геометрию
+            AcDbObjectIdArray toErase;
+            for (AcDbBlockTableRecordIterator* pIt = nullptr;
+                 pBtr->newIterator(pIt) == Acad::eOk; ) {
+                for (; !pIt->done(); pIt->step()) {
+                    AcDbObjectId id;
+                    if (pIt->getEntityId(id) == Acad::eOk) toErase.append(id);
+                }
+                delete pIt;
+                break;
+            }
+            for (int i = 0; i < toErase.length(); i++) {
+                AcDbEntity* pEnt = nullptr;
+                if (acdbOpenObject(pEnt, toErase[i], AcDb::kForWrite) == Acad::eOk) {
+                    pEnt->erase();
+                    pEnt->close();
+                }
+            }
+        } else {
+            pBtr = new AcDbBlockTableRecord();
+            pBtr->setName(blockName);
+            if (pBT->add(pBtr) != Acad::eOk) {
+                delete pBtr;
+                continue;
+            }
+            pBtr->setOrigin(AcGePoint3d::kOrigin);
+        }
+
+        // ---- геометрия внутри блока ----
+        AcDb3dSolid* solid = TrinityGeometryBuilder::build(d);
+        if (solid) {
+            AcDbObjectId entId;
+            if (pBtr->appendAcDbEntity(entId, solid) == Acad::eOk)
+                solid->close();
+            else
+                delete solid;
+        }
+
+        if (category == "rib") {
+            TrinityLayerManager::ensureBoltLayer(targetDb);
+            AcDbObjectIdArray ids;
+            TrinityGeometryBuilder::drawBoltMarkers(d, pBtr, ids);
+        }
+
+        // невидимая метка с кодом детали (слой _tag)
+        TrinityAttributeBuilder::ensureTagLayer(targetDb);
+        AcDbText* pTag = new AcDbText();
+        wchar_t codeW[256];
+        MultiByteToWideChar(CP_UTF8, 0, d.code.c_str(), -1, codeW, 256);
+        pTag->setPosition(AcGePoint3d::kOrigin);
+        pTag->setTextString(codeW);
+        pTag->setHeight(10);
+        pTag->setLayer(_T("_tag"));
+        pTag->setInvisibility(Adesk::kTrue);
+        AcDbObjectId tagId;
+        if (pBtr->appendAcDbEntity(tagId, pTag) == Acad::eOk)
+            pTag->close();
+        else
+            delete pTag;
+
+        // ---- XDATA: метаданные детали на определении блока ----
+        resbuf* xd = nullptr;
+        auto addStr = [&xd](int code, const wchar_t* val) {
+            resbuf* rb = acutNewRb(code);
+            rb->rbnext = nullptr;
+            wcsncpy_s(rb->resval.rstring, 256, val, _TRUNCATE);
+            xd = acutAppendRb(xd, rb);
+        };
+        addStr(AcDb::kDxfRegAppName,  L"TRINITY");
+        addStr(AcDb::kDxfXdAsciiString, L"CATEGORY"); // далее пары ключ-значение
+        wchar_t buf[256];
+        _snwprintf_s(buf, 256, _T("%hs"), category.c_str());
+        addStr(AcDb::kDxfXdAsciiString, buf);
+        addStr(AcDb::kDxfXdAsciiString, L"CODE");
+        addStr(AcDb::kDxfXdAsciiString, codeW);
+        addStr(AcDb::kDxfXdAsciiString, L"MATERIAL");
+        wchar_t matW[256];
+        MultiByteToWideChar(CP_UTF8, 0, d.material.c_str(), -1, matW, 256);
+        addStr(AcDb::kDxfXdAsciiString, matW);
+        addStr(AcDb::kDxfXdAsciiString, L"BASE_WIDTH");
+        _snwprintf_s(buf, 256, _T("%.1f"), (double)d.width);
+        addStr(AcDb::kDxfXdAsciiString, buf);
+        addStr(AcDb::kDxfXdAsciiString, L"BASE_HEIGHT");
+        _snwprintf_s(buf, 256, _T("%.1f"), (double)d.height);
+        addStr(AcDb::kDxfXdAsciiString, buf);
+        addStr(AcDb::kDxfXdAsciiString, L"BASE_THICKNESS");
+        _snwprintf_s(buf, 256, _T("%.1f"), (double)d.thickness);
+        addStr(AcDb::kDxfXdAsciiString, buf);
+        pBtr->xData(xd, true);
+        acutRelRb(xd);
+
+        pBtr->close();
+
+        // ---- ссылка на блок в ModelSpace ----
+        AcDbBlockTableRecord* pBtrR = nullptr;
+        if (pBT->getAt(blockName, pBtrR, AcDb::kForRead) == Acad::eOk) {
+            AcDbBlockReference* pRef = new AcDbBlockReference(
+                AcGePoint3d(0.0, yCursor, 0.0), pBtrR->objectId());
+            pBtrR->close();
+
+            AcDbObjectId refId;
+            if (pMS->appendAcDbEntity(refId, pRef) == Acad::eOk) {
+                pRef->close();
+                inserted++;
+            } else {
+                delete pRef;
+            }
+        }
+
+        yCursor += d.height + ROW_GAP;
+    }
+
+    pMS->close();
+    pBT->close();
+
+    acutPrintf(_T("\n[Trinity] Inserted %d '%hs' detail(s) into current drawing.\n"),
+               inserted, category.c_str());
+    return inserted;
 }

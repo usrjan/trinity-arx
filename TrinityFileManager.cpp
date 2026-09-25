@@ -54,7 +54,6 @@ AcDbObjectId TrinityFileManager::attachXref(
     }
 
     AcDbObjectId blockId = AcDbObjectId::kNull;
-    bool wasInserted = false;
 
     // Шаг 1: Проверяем, есть ли блок уже в таблице
     AcDbBlockTable* pBlockTable = nullptr;
@@ -66,53 +65,38 @@ AcDbObjectId TrinityFileManager::attachXref(
             es = pBlockTable->getAt(nameW, pBlockRec, AcDb::kForRead);
             if (es == Acad::eOk && pBlockRec) {
                 // Если это XREF — проверяем, существует ли файл
+                bool staleXref = false;
                 if (pBlockRec->isFromExternalReference()) {
                     // Получаем путь к внешнему файлу через AcString
                     AcString xrefPath;
                     Acad::ErrorStatus pathEs = pBlockRec->pathName(xrefPath);
-                    
-                    bool fileExists = false;
+
+                    bool fileOnDisk = false;
                     if (pathEs == Acad::eOk) {
-                        fileExists = (_waccess(xrefPath.kwszPtr(), 0) == 0);
+                        fileOnDisk = (_waccess(xrefPath.kwszPtr(), 0) == 0);
                     }
-                    
-                    if (!fileExists) {
-                        // Файл удалён — нужно удалить старый блок и вставить заново
-                        pBlockRec->close();
-                        pBlockTable->upgradeOpen();
-                        
-                        // Удаляем старый блок из таблицы
-                        AcDbObjectId oldBlockId;
-                        pBlockTable->getAt(nameW, oldBlockId);
-                        
-                        // Открываем для записи и удаляем
-                        AcDbBlockTableRecord* pOldRec = nullptr;
-                        es = pBlockTable->getAt(nameW, pOldRec, AcDb::kForWrite);
-                        if (es == Acad::eOk && pOldRec) {
-                            pOldRec->erase();
-                            pOldRec->close();
-                        }
-                        pBlockTable->close();
-                        
-                        // Теперь блока нет — будем вставлять заново
-                        blockId = AcDbObjectId::kNull;
-                        wasInserted = false;
-                    } else {
-                        pBlockRec->close();
-                        pBlockTable->getAt(nameW, blockId);
-                        pBlockTable->close();
-                        wasInserted = true;
-                    }
-                } else {
-                    pBlockRec->close();
-                    pBlockTable->getAt(nameW, blockId);
-                    pBlockTable->close();
-                    wasInserted = true;
+                    staleXref = !fileOnDisk;
                 }
-            } else {
-                if (pBlockRec) pBlockRec->close();
-                pBlockTable->close();
+                pBlockRec->close();
+
+                if (staleXref) {
+                    // Файл удалён — нужно удалить старый блок и вставить заново
+                    pBlockTable->upgradeOpen();
+
+                    AcDbBlockTableRecord* pOldRec = nullptr;
+                    es = pBlockTable->getAt(nameW, pOldRec, AcDb::kForWrite);
+                    if (es == Acad::eOk && pOldRec) {
+                        pOldRec->erase();
+                        pOldRec->close();
+                    }
+
+                    // Теперь блока нет — будем вставлять заново
+                    blockId = AcDbObjectId::kNull;
+                } else {
+                    pBlockTable->getAt(nameW, blockId);
+                }
             }
+            pBlockTable->close();
         } else {
             pBlockTable->close();
         }
@@ -125,7 +109,6 @@ AcDbObjectId TrinityFileManager::attachXref(
 
         if (es == Acad::eOk) {
             es = targetDb->insert(blockId, nameW, pXrefDb, true);
-            wasInserted = (es == Acad::eOk);
         }
         delete pXrefDb;
 
@@ -133,12 +116,12 @@ AcDbObjectId TrinityFileManager::attachXref(
         if (es == Acad::eDuplicateKey) {
             // Блок уже есть (гонка или скрытый блок) — получаем его ID
             AcDbBlockTable* pBt = nullptr;
-            targetDb->getSymbolTable(pBt, AcDb::kForRead);
-            if (pBt->has(nameW)) {
-                pBt->getAt(nameW, blockId);
+            if (targetDb->getSymbolTable(pBt, AcDb::kForRead) == Acad::eOk) {
+                if (pBt->has(nameW)) {
+                    pBt->getAt(nameW, blockId);
+                }
+                pBt->close();
             }
-            pBt->close();
-            wasInserted = true;
         }
         else if (es != Acad::eOk) {
             acutPrintf(_T("\n[FileManager] Insert failed (error %d)\n"), es);
