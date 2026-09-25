@@ -137,7 +137,12 @@ AcDb3dSolid* TrinityGeometryBuilder::buildRib(const TrinityNeuron& d) {
     AcGeVector3d v1(0.0, 0.0, 1.0);
     AcGeMatrix3d mat;
     mat.setToRotation(-(90.0 * (M_PI / 180.0)), v1, p1);
-    mat.setTranslation(AcGeVector3d(0, H, 0));
+    // ВАЖНО (фикс Access Violation / неверной геометрии): setTranslation()
+    // ЗАМЕЩАЕТ всю матрицу единичной с переводом, стирая только что заданный
+    // поворот. Перевод нужно ДОБАВЛЯТЬ умножением: итог = T * R.
+    AcGeMatrix3d transMat;
+    transMat.setToTranslation(AcGeVector3d(0, H, 0));
+    mat = transMat * mat;
     pPoly->transformBy(mat);
 
     AcDbVoidPtrArray lines;
@@ -284,6 +289,11 @@ void TrinityGeometryBuilder::transform(AcDb3dSolid* solid,
         }
     }
 
-    mat.setTranslation(AcGeVector3d(pos.x, pos.y, pos.z));
+    // ВАЖНО (фикс Access Violation): mat.setTranslation() ЗАМЕЩАЕТ всю матрицу,
+    // стирая накопленные вращения (итог был просто переводом). Правильная
+    // композиция — умножение: итог = T * R1 * R2 ...
+    AcGeMatrix3d transMat;
+    transMat.setToTranslation(AcGeVector3d(pos.x, pos.y, pos.z));
+    mat = transMat * mat;
     solid->transformBy(mat);
 }

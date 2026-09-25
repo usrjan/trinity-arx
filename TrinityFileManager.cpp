@@ -127,21 +127,32 @@ AcDbObjectId TrinityFileManager::attachXref(
             es = targetDb->insert(blockId, nameW, pXrefDb, true);
             wasInserted = (es == Acad::eOk);
         }
-        delete pXrefDb;
+        // ВАЖНО (фикс Access Violation): раньше здесь был безусловно
+        // вызываемый `delete pXrefDb` ПОСЛЕ успешного insert(..., attachOnLoad=true).
+        // При attachOnLoad база-источник становится собственностью BlockTableRecord
+        // целевой базы, и её ручное удаление = use-after-free / двойное freed
+        // при закрытии целевой базы (Fatal Error). Освобождаем pXrefDb ТОЛЬКО
+        // когда вставка не состоялась (база осталась нашей).
+        if (es != Acad::eOk) {
+            delete pXrefDb;
+        }
 
         // Шаг 3: ОБРАБОТКА РЕЗУЛЬТАТА
         if (es == Acad::eDuplicateKey) {
-            // Блок уже есть (гонка или скрытый блок) — получаем его ID
+            // Блок уже есть (гонка или скрытый блок) — получаем его ID.
+            // ВАЖНО: проверка pBt на nullptr — getSymbolTable мог упасть,
+            // разыменование нулевого указателя = Fatal Error / AV.
             AcDbBlockTable* pBt = nullptr;
-            targetDb->getSymbolTable(pBt, AcDb::kForRead);
-            if (pBt->has(nameW)) {
-                pBt->getAt(nameW, blockId);
+            if (targetDb->getSymbolTable(pBt, AcDb::kForRead) == Acad::eOk && pBt) {
+                if (pBt->has(nameW)) {
+                    pBt->getAt(nameW, blockId);
+                }
+                pBt->close();
             }
-            pBt->close();
             wasInserted = true;
         }
         else if (es != Acad::eOk) {
-            acutPrintf(_T("\n[FileManager] Insert failed (error %d)\n"), es);
+            acutPrintf(_T("\n[FileManager] Insert failed (error %d)\n"), (int)es);
             return AcDbObjectId::kNull;
         }
     }
@@ -175,9 +186,16 @@ AcDbObjectId TrinityFileManager::attachXref(
         return AcDbObjectId::kNull;
     }
 
+    // ВАЖНО (фикс Access Violation): mat.setTranslation() ПОЛНОСТЬЮ ЗАМЕНЯЕТ
+    // матрицу (все её части, включая вращение), а не дописывает перевод.
+    // Раньше цикл накопления `mat = mat * rotMat` затирался последней строкой,
+    // и вращение терялось; при нулевом/мусорном accum-матрице transformBy
+    // на открытой сущности мог уронить AutoCAD. Теперь перевод добавляется
+    // УМНОЖЕНИЕМ после вращения: итог = T * R1 * R2 ...
+    AcGeMatrix3d mat;
+    mat.setToIdentity();
+
     if (rot.count > 0) {
-        AcGeMatrix3d mat;
-        mat.setToIdentity();
         for (int i = 0; i < rot.count; i++) {
             const auto& r = rot.rotations[i];
             if (r.angle != 0) {
@@ -186,12 +204,17 @@ AcDbObjectId TrinityFileManager::attachXref(
                     axis.normalize();
                     AcGeMatrix3d rotMat;
                     rotMat.setToRotation(r.angle * M_PI / 180.0, axis, pos);
-                    mat = mat * rotMat;
+                    mat = rotMat * mat;
                 }
             }
         }
-        pRef->transformBy(mat);
     }
+
+    AcGeMatrix3d transMat;
+    transMat.setToTranslation(AcGeVector3d(pos.x, pos.y, pos.z));
+    mat = transMat * mat;
+
+    pRef->transformBy(mat);
 
     AcDbObjectId refId;
     es = pMs->appendAcDbEntity(refId, pRef);
