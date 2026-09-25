@@ -7,96 +7,6 @@
 #include <io.h>
 
 // ============================================================
-// ГЛАВНЫЙ РЕКУРСИВНЫЙ МЕТОД
-// ============================================================
-// Логика:
-//   1. Загружаем нейрон по коду
-//   2. Определяем подкаталог (details/assemblies/projects)
-//   3. Если файл есть — вставляем XREF и выходим
-//   4. Если файла нет:
-//      - для detail  → buildDetail
-//      - для assembly/construction/project → buildDwg
-//   5. Сохраняем DWG через saveDwg
-//   6. Вставляем XREF
-// ============================================================
-AcDbObjectId TrinityBuildEngine::ensureExists(const std::string& code,
-                                                const AcGePoint3d& position,
-                                                const TrinityRotationCompound& rotation,
-                                                AcDbDatabase* targetDb,
-                                                int depth) {
-    // Защита от бесконечной рекурсии
-    if (depth > 20) {
-        wchar_t* wCode = utf2uni(code.c_str());
-        acutPrintf(_T("\n[BuildEngine] MAX DEPTH reached for %s\n"), wCode);
-        free(wCode);
-        return AcDbObjectId::kNull;
-    }
-
-    // 1. Загружаем нейрон
-    TrinityNeuron* pNeuron = m_core.loadNeuronByCode(code);
-    if (!pNeuron) {
-        wchar_t* wCode = utf2uni(code.c_str());
-        acutPrintf(_T("\n[BuildEngine] Neuron not found: %s\n"), wCode);
-        free(wCode);
-        return AcDbObjectId::kNull;
-    }
-
-    TrinityNeuron neuron = *pNeuron;
-    delete pNeuron;
-
-    // 2. Определяем подкаталог
-    std::string subdir;
-    if (neuron.type == "detail") {
-        subdir = m_files.detailsDir();
-    } else if (neuron.type == "assembly" || neuron.type == "construction") {
-        subdir = m_files.assembliesDir();
-    } else {
-        subdir = m_files.projectsDir();
-    }
-
-    std::string filePath = m_files.getFilePath(neuron.code, subdir);
-
-    // 3. Если файл существует — вставляем XREF
-    if (m_files.fileExists(neuron.code, subdir)) {
-        wchar_t* wCode = utf2uni(neuron.code.c_str());
-        acutPrintf(_T("\n[BuildEngine] EXISTS: %s (depth=%d)\n"), wCode, depth);
-        free(wCode);
-
-        return m_files.attachXref(filePath, neuron.code, position, rotation, targetDb);
-    }
-
-    // 4. Файла нет — строим
-    wchar_t* wCode = utf2uni(neuron.code.c_str());
-    wchar_t* wType = utf2uni(neuron.type.c_str());
-    acutPrintf(_T("\n[BuildEngine] BUILDING: %s (type=%s, depth=%d)\n"),
-               wCode, wType, depth);
-    free(wCode);
-    free(wType);
-
-    AcDbDatabase* cleanDb = nullptr;
-
-    if (neuron.type == "detail") {
-        cleanDb = buildDetail(neuron);
-    } else {
-        cleanDb = buildDwg(neuron, depth);
-    }
-
-    if (!cleanDb) {
-        return AcDbObjectId::kNull;
-    }
-
-    // 5. Сохраняем
-    m_files.saveDwg(cleanDb, filePath);
-    delete cleanDb;
-
-    // Пауза для файловой системы
-    Sleep(200);
-
-    // 6. Вставляем XREF
-    return m_files.attachXref(filePath, neuron.code, position, rotation, targetDb);
-}
-
-// ============================================================
 // ПОСТРОЕНИЕ ДЕТАЛИ
 // ============================================================
 // Порядок:
@@ -133,9 +43,16 @@ AcDbDatabase* TrinityBuildEngine::buildDetail(const TrinityNeuron& detail) {
 
     // Получаем Model Space
     AcDbBlockTable* pBt = nullptr;
-    tempDb->getSymbolTable(pBt, AcDb::kForRead);
+    if (tempDb->getSymbolTable(pBt, AcDb::kForRead) != Acad::eOk) {
+        delete tempDb;
+        return nullptr;
+    }
     AcDbBlockTableRecord* pMs = nullptr;
-    pBt->getAt(ACDB_MODEL_SPACE, pMs, AcDb::kForWrite);
+    if (pBt->getAt(ACDB_MODEL_SPACE, pMs, AcDb::kForWrite) != Acad::eOk) {
+        pBt->close();
+        delete tempDb;
+        return nullptr;
+    }
     pBt->close();
 
     AcDbObjectIdArray ids;
@@ -235,8 +152,9 @@ AcDbDatabase* TrinityBuildEngine::buildDetail(const TrinityNeuron& detail) {
     Acad::ErrorStatus es = tempDb->wblock(cleanDb, ids, AcGePoint3d::kOrigin);
     delete tempDb;
 
+    // При ошибке wblock гарантированно возвращает nullptr в cleanDb —
+    // повторное delete было бы двойным освобождением
     if (es != Acad::eOk || !cleanDb) {
-        delete cleanDb;
         return nullptr;
     }
 
@@ -255,35 +173,39 @@ AcDbDatabase* TrinityBuildEngine::buildDetail(const TrinityNeuron& detail) {
     // ПЕРЕНАЗНАЧАЕМ СЛОИ ОБЪЕКТАМ
     // ============================================================
     AcDbBlockTable* pBt2 = nullptr;
-    cleanDb->getSymbolTable(pBt2, AcDb::kForRead);
-    AcDbBlockTableRecord* pMs2 = nullptr;
-    pBt2->getAt(ACDB_MODEL_SPACE, pMs2, AcDb::kForWrite);
-    pBt2->close();
+    if (cleanDb->getSymbolTable(pBt2, AcDb::kForRead) == Acad::eOk) {
+        AcDbBlockTableRecord* pMs2 = nullptr;
+        if (pBt2->getAt(ACDB_MODEL_SPACE, pMs2, AcDb::kForWrite) == Acad::eOk) {
+            pBt2->close();
 
-    AcDbBlockTableRecordIterator* pIter = nullptr;
-    pMs2->newIterator(pIter);
+            AcDbBlockTableRecordIterator* pIter = nullptr;
+            pMs2->newIterator(pIter);
 
-    if (pIter) {
-        wchar_t matLayerW[256];
-        MultiByteToWideChar(CP_UTF8, 0, layer.c_str(), -1, matLayerW, 256);
+            if (pIter) {
+                wchar_t matLayerW[256];
+                MultiByteToWideChar(CP_UTF8, 0, layer.c_str(), -1, matLayerW, 256);
 
-        for (pIter->start(); !pIter->done(); pIter->step()) {
-            AcDbEntity* pEnt = nullptr;
-            if (pIter->getEntity(pEnt, AcDb::kForWrite) == Acad::eOk && pEnt) {
-                if (pEnt->isKindOf(AcDb3dSolid::desc())) {
-                    pEnt->setLayer(matLayerW);        // солид → материал
-                } else if (pEnt->isKindOf(AcDbCircle::desc())) {
-                    pEnt->setLayer(_T("_bolt"));       // кружочек → _bolt
-                } else {
-                    pEnt->setLayer(_T("_tag"));        // атрибут → _tag
+                for (pIter->start(); !pIter->done(); pIter->step()) {
+                    AcDbEntity* pEnt = nullptr;
+                    if (pIter->getEntity(pEnt, AcDb::kForWrite) == Acad::eOk && pEnt) {
+                        if (pEnt->isKindOf(AcDb3dSolid::desc())) {
+                            pEnt->setLayer(matLayerW);       // солид → материал
+                        } else if (pEnt->isKindOf(AcDbCircle::desc())) {
+                            pEnt->setLayer(_T("_bolt"));     // кружочек → _bolt
+                        } else {
+                            pEnt->setLayer(_T("_tag"));      // атрибут → _tag
+                        }
+                        pEnt->close();
+                    }
                 }
-                pEnt->close();
+                delete pIter;
             }
-        }
-        delete pIter;
-    }
 
-    pMs2->close();
+            pMs2->close();
+        } else {
+            pBt2->close();
+        }
+    }
 
     // Финальный отчёт
     /*
@@ -370,8 +292,9 @@ AcDbDatabase* TrinityBuildEngine::buildDwg(const TrinityNeuron& neuron, int dept
     Acad::ErrorStatus es = tempDb->wblock(cleanDb, ids, AcGePoint3d::kOrigin);
     delete tempDb;
 
+    // При ошибке wblock гарантированно возвращает nullptr в cleanDb —
+    // повторное delete было бы двойным освобождением
     if (es != Acad::eOk || !cleanDb) {
-        delete cleanDb;
         return nullptr;
     }
 
