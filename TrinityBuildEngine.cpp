@@ -7,65 +7,62 @@
 #include <io.h>
 
 // ============================================================
-// ГЛАВНЫЙ РЕКУРСИВНЫЙ МЕТОД
+// ОБЩИЕ ПРАВИЛА ПУТЕЙ (вынесено из ensureFileExists / deleteProjectFiles)
 // ============================================================
-// Логика:
-//   1. Загружаем нейрон по коду
-//   2. Определяем подкаталог (details/assemblies/projects)
-//   3. Если файл есть — вставляем XREF и выходим
-//   4. Если файла нет:
-//      - для detail  → buildDetail
-//      - для assembly/construction/project → buildDwg
-//   5. Сохраняем DWG через saveDwg
-//   6. Вставляем XREF
+// Тип нейрона → подкаталог хранилища DWG
+std::string TrinityBuildEngine::subdirForType(const std::string& type) {
+    if (type == "detail") {
+        return m_files.detailsDir();
+    }
+    if (type == "assembly" || type == "construction") {
+        return m_files.assembliesDir();
+    }
+    return m_files.projectsDir();
+}
+
+// Полный путь к DWG-файлу нейрона
+std::string TrinityBuildEngine::filePathForNeuron(const TrinityNeuron& neuron) {
+    return m_files.getFilePath(neuron.code, subdirForType(neuron.type));
+}
+
 // ============================================================
-AcDbObjectId TrinityBuildEngine::ensureExists(const std::string& code,
-                                                const AcGePoint3d& position,
-                                                const TrinityRotationCompound& rotation,
-                                                AcDbDatabase* targetDb,
-                                                int depth) {
+// ОБЕСПЕЧИТЬ СУЩЕСТВОВАНИЕ ФАЙЛА (без вставки XREF)
+// ============================================================
+// Единая точка загрузки нейрона и постройки файла:
+//   1. Проверка глубины рекурсии
+//   2. Загрузка нейрона по коду
+//   3. Путь через общие правила (filePathForNeuron)
+//   4. Если файла нет — buildDetail / buildDwg + saveDwg
+// Возвращает путь к файлу или пустую строку при ошибке.
+// Используется в buildDwg для детей и в processAllProjects для проектов.
+// ============================================================
+std::string TrinityBuildEngine::ensureFileExists(const std::string& code, int depth) {
     // Защита от бесконечной рекурсии
     if (depth > 20) {
         wchar_t* wCode = utf2uni(code.c_str());
-        acutPrintf(_T("\n[BuildEngine] MAX DEPTH reached for %s\n"), wCode);
+        acutPrintf(_T("\n[BuildEngine] MAX DEPTH for %s\n"), wCode);
         free(wCode);
-        return AcDbObjectId::kNull;
+        return "";
     }
 
-    // 1. Загружаем нейрон
+    // Загружаем нейрон
     TrinityNeuron* pNeuron = m_core.loadNeuronByCode(code);
     if (!pNeuron) {
         wchar_t* wCode = utf2uni(code.c_str());
         acutPrintf(_T("\n[BuildEngine] Neuron not found: %s\n"), wCode);
         free(wCode);
-        return AcDbObjectId::kNull;
+        return "";
     }
 
     TrinityNeuron neuron = *pNeuron;
     delete pNeuron;
 
-    // 2. Определяем подкаталог
-    std::string subdir;
-    if (neuron.type == "detail") {
-        subdir = m_files.detailsDir();
-    } else if (neuron.type == "assembly" || neuron.type == "construction") {
-        subdir = m_files.assembliesDir();
-    } else {
-        subdir = m_files.projectsDir();
-    }
+    std::string filePath = filePathForNeuron(neuron);
 
-    std::string filePath = m_files.getFilePath(neuron.code, subdir);
+    // Если файл уже есть — возвращаем путь
+    if (m_files.fileExists(neuron.code, subdirForType(neuron.type))) return filePath;
 
-    // 3. Если файл существует — вставляем XREF
-    if (m_files.fileExists(neuron.code, subdir)) {
-        wchar_t* wCode = utf2uni(neuron.code.c_str());
-        acutPrintf(_T("\n[BuildEngine] EXISTS: %s (depth=%d)\n"), wCode, depth);
-        free(wCode);
-
-        return m_files.attachXref(filePath, neuron.code, position, rotation, targetDb);
-    }
-
-    // 4. Файла нет — строим
+    // Строим
     wchar_t* wCode = utf2uni(neuron.code.c_str());
     wchar_t* wType = utf2uni(neuron.type.c_str());
     acutPrintf(_T("\n[BuildEngine] BUILDING: %s (type=%s, depth=%d)\n"),
@@ -73,28 +70,55 @@ AcDbObjectId TrinityBuildEngine::ensureExists(const std::string& code,
     free(wCode);
     free(wType);
 
-    AcDbDatabase* cleanDb = nullptr;
-
+    AcDbDatabase* db = nullptr;
     if (neuron.type == "detail") {
-        cleanDb = buildDetail(neuron);
+        db = buildDetail(neuron);
     } else {
-        cleanDb = buildDwg(neuron, depth);
+        db = buildDwg(neuron, depth);
     }
 
-    if (!cleanDb) {
-        return AcDbObjectId::kNull;
-    }
+    if (!db) return "";
 
-    // 5. Сохраняем
-    m_files.saveDwg(cleanDb, filePath);
-    delete cleanDb;
+    // Сохраняем
+    m_files.saveDwg(db, filePath);
+    delete db;
 
     // Пауза для файловой системы
     Sleep(200);
 
-    // 6. Вставляем XREF
-    return m_files.attachXref(filePath, neuron.code, position, rotation, targetDb);
+    return filePath;
 }
+
+// ============================================================
+// РЕКУРСИВНОЕ ОБЕСПЕЧЕНИЕ DWG + ВСТАВКА XREF
+// ============================================================
+// Вся логика «есть ли файл / построить» объединена в ensureFileExists —
+// здесь остаётся только надстройка «вставить XREF в целевую базу».
+// position == AcGePoint3d::kOrigin (nullPos) — режим «только файл»:
+// постройка выполняется, вставка пропускается (возвращается kNull).
+// ============================================================
+AcDbObjectId TrinityBuildEngine::ensureExists(const std::string& code,
+                                                const AcGePoint3d& position,
+                                                const TrinityRotationCompound& rotation,
+                                                AcDbDatabase* targetDb,
+                                                int depth) {
+    const std::string filePath = ensureFileExists(code, depth);
+    if (filePath.empty()) return AcDbObjectId::kNull;
+
+    // Режим «нужен только файл» (используется рекурсией buildDwg)
+    if (position.isEqualTo(AcGePoint3d::kOrigin)) {
+        return AcDbObjectId::kNull;
+    }
+
+    if (depth > 20) return AcDbObjectId::kNull; // защита от глубокой вставки
+
+    wchar_t* wCode = utf2uni(code.c_str());
+    acutPrintf(_T("\n[BuildEngine] ATTACH XREF: %s (depth=%d)\n"), wCode, depth);
+    free(wCode);
+
+    return m_files.attachXref(filePath, code, position, rotation, targetDb);
+}
+
 
 // ============================================================
 // ПОСТРОЕНИЕ ДЕТАЛИ
@@ -109,8 +133,24 @@ AcDbObjectId TrinityBuildEngine::ensureExists(const std::string& code,
 //   7. solid->close() — ПОСЛЕ всех операций
 //   8. Атрибуты (DETAIL_CODE на слое _tag)
 //   9. wblock → cleanDb
-//  10. Переназначение слоёв: solid → материал, circle → _bolt, attr → _tag
+//  10. Переназначение слоёв по общим правилам (applyDetailLayerRules):
+//      solid → слой материала, circle → _bolt, остальное → _tag
 // ============================================================
+
+// ----------------------------------------------------------------
+// ОБЩИЕ ПРАВИЛА СЛОЁВ ДЛЯ ДЕТАЛИ: сущность → целевой слой
+// solid   → слой материала, circle → _bolt (болты), прочее → _tag (атрибуты)
+// ----------------------------------------------------------------
+static void applyDetailLayerRule(AcDbEntity* pEnt, const wchar_t* materialLayerW) {
+    if (pEnt->isKindOf(AcDb3dSolid::desc())) {
+        pEnt->setLayer(materialLayerW);                      // солид → материал
+    } else if (pEnt->isKindOf(AcDbCircle::desc())) {
+        pEnt->setLayer(TrinityLayerManager::LAYER_BOLT_W);   // кружочек → _bolt
+    } else {
+        pEnt->setLayer(TrinityLayerManager::LAYER_TAG_W);    // атрибут → _tag
+    }
+}
+
 AcDbDatabase* TrinityBuildEngine::buildDetail(const TrinityNeuron& detail) {
     AcDbDatabase* tempDb = new AcDbDatabase(Adesk::kTrue, Adesk::kTrue);
     if (!tempDb) return nullptr;
@@ -332,16 +372,11 @@ AcDbDatabase* TrinityBuildEngine::buildDetail(const TrinityNeuron& detail) {
     wchar_t matLayerW[256];
     MultiByteToWideChar(CP_UTF8, 0, layer.c_str(), -1, matLayerW, 256);
 
+    // Общие правила слоёв — одна функция applyDetailLayerRule на сущность
     for (pIter->start(); !pIter->done(); pIter->step()) {
         AcDbEntity* pEnt = nullptr;
         if (pIter->getEntity(pEnt, AcDb::kForWrite) == Acad::eOk && pEnt) {
-            if (pEnt->isKindOf(AcDb3dSolid::desc())) {
-                pEnt->setLayer(matLayerW);        // солид → материал
-            } else if (pEnt->isKindOf(AcDbCircle::desc())) {
-                pEnt->setLayer(_T("_bolt"));       // кружочек → _bolt
-            } else {
-                pEnt->setLayer(_T("_tag"));        // атрибут → _tag
-            }
+            applyDetailLayerRule(pEnt, matLayerW);
             pEnt->close();
         }
     }
@@ -365,8 +400,8 @@ AcDbDatabase* TrinityBuildEngine::buildDetail(const TrinityNeuron& detail) {
 // Логика:
 //   1. tempDb — временная база
 //   2. Для каждого ребёнка:
-//      - ensureFileExists — убедиться, что файл есть (без XREF)
-//      - attachXref — вставить XREF ребёнка во ВРЕМЕННУЮ базу
+//      - ensureExists(position=nullPos) — построить файл (без вставки),
+//        затем attachXref во ВРЕМЕННУЮ базу (общая логика с ensureExists)
 //      - собрать ObjectId в массив
 //   3. wblock → cleanDb
 // ============================================================
@@ -382,29 +417,15 @@ AcDbDatabase* TrinityBuildEngine::buildDwg(const TrinityNeuron& neuron, int dept
 
     auto children = m_core.loadChildren(neuron.id);
 
-    /*
-    wchar_t* wCode = utf2uni(neuron.code.c_str());
-    acutPrintf(_T("\n[BuildEngine] Building %s: %d children (depth=%d)\n"),
-        wCode, static_cast<int>(children.size()), depth);
-    free(wCode);
-    */
-
     for (auto& syn : children) {
         AcGePoint3d childPos = syn.position.toAcGe();
 
-        /*
-        wchar_t* wChild = utf2uni(syn.childCode.c_str());
-        acutPrintf(_T("\n[BuildEngine] Child: %s (depth=%d)\n"), wChild, depth);
-        free(wChild);
-        */
-
+        // Общие правила пути + постройка файла (если нужно) — внутри ensureFileExists
         std::string childFilePath = ensureFileExists(syn.childCode, depth + 1);
         if (childFilePath.empty()) {
             acutPrintf(_T("\n[BuildEngine] ensureFileExists returned EMPTY\n"));
             continue;
         }
-
-        //acutPrintf(_T("\n[BuildEngine] Got file path, attaching XREF...\n"));
 
         // НЕ держим Model Space открытым — attachXref сам его откроет
         AcDbObjectId childId = m_files.attachXref(
@@ -412,18 +433,11 @@ AcDbDatabase* TrinityBuildEngine::buildDwg(const TrinityNeuron& neuron, int dept
 
         if (childId != AcDbObjectId::kNull) {
             ids.append(childId);
-            //acutPrintf(_T("\n[BuildEngine] XREF appended to ids\n"));
         }
         else {
             acutPrintf(_T("\n[BuildEngine] attachXref returned kNull\n"));
         }
     }
-
-    // Получаем Model Space ТОЛЬКО ПОСЛЕ цикла, для закрытия
-    // Или вообще не открываем его — wblock сам разберётся
-    // (мы не добавляли ничего вручную в Model Space, только через attachXref)
-
-    //acutPrintf(_T("\n[BuildEngine] buildDwg loop done, ids.length=%d\n"), (int)ids.length());
 
     if (ids.isEmpty()) {
         delete tempDb;
@@ -440,62 +454,6 @@ AcDbDatabase* TrinityBuildEngine::buildDwg(const TrinityNeuron& neuron, int dept
     }
 
     return cleanDb;
-}
-
-// ============================================================
-// ОБЕСПЕЧИТЬ СУЩЕСТВОВАНИЕ ФАЙЛА (без вставки XREF)
-// ============================================================
-// Используется внутри buildDwg для рекурсивной подготовки детей.
-// Возвращает путь к файлу или пустую строку при ошибке.
-// ============================================================
-std::string TrinityBuildEngine::ensureFileExists(const std::string& code, int depth) {
-    // Защита от бесконечной рекурсии
-    if (depth > 20) {
-        wchar_t* wCode = utf2uni(code.c_str());
-        acutPrintf(_T("\n[BuildEngine] MAX DEPTH for %s\n"), wCode);
-        free(wCode);
-        return "";
-    }
-
-    // Загружаем нейрон
-    TrinityNeuron* pNeuron = m_core.loadNeuronByCode(code);
-    if (!pNeuron) return "";
-
-    TrinityNeuron neuron = *pNeuron;
-    delete pNeuron;
-
-    // Определяем подкаталог
-    std::string subdir;
-    if (neuron.type == "detail") {
-        subdir = m_files.detailsDir();
-    } else if (neuron.type == "assembly" || neuron.type == "construction") {
-        subdir = m_files.assembliesDir();
-    } else {
-        subdir = m_files.projectsDir();
-    }
-
-    std::string filePath = m_files.getFilePath(neuron.code, subdir);
-
-    // Если файл уже есть — возвращаем путь
-    if (m_files.fileExists(neuron.code, subdir)) return filePath;
-
-    // Строим
-    AcDbDatabase* db = nullptr;
-    if (neuron.type == "detail") {
-        db = buildDetail(neuron);
-    }
-    else {
-        db = buildDwg(neuron, depth);
-    }
-
-    if (!db) return "";
-
-    // Сохраняем
-    m_files.saveDwg(db, filePath);
-    delete db;
-    Sleep(200);
-
-    return filePath;
 }
 
 // ============================================================
@@ -547,17 +505,9 @@ void TrinityBuildEngine::deleteProjectFiles(const std::string& code) {
     TrinityNeuron neuron = *pNeuron;
     delete pNeuron;
 
-    // Определяем подкаталог и путь к файлу
-    std::string subdir;
-    if (neuron.type == "detail") {
-        subdir = m_files.detailsDir();
-    } else if (neuron.type == "assembly" || neuron.type == "construction") {
-        subdir = m_files.assembliesDir();
-    } else {
-        subdir = m_files.projectsDir();
-    }
-
-    std::string filePath = m_files.getFilePath(neuron.code, subdir);
+    // Общие правила путей (те же, что в ensureFileExists)
+    const std::string subdir   = subdirForType(neuron.type);
+    const std::string filePath = filePathForNeuron(neuron);
 
     // Удаляем файл, если он существует
     if (m_files.fileExists(neuron.code, subdir)) {
