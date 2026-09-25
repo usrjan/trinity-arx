@@ -173,11 +173,15 @@ g_timerId = 0;
    `PostMessage(WM_TRINITY_TICK)` (защита от наложения тиков через флаг).
 3. Обработчик `WM_TRINITY_TICK` (подклассирование окна) выполняется на главном
    потоке AutoCAD, где:
-   - если document lock mode включён — активный документ залочивается на
-     запись RAII-обёрткой `TrinityDocLock` (`acDocManager->lockDocument()` /
-     гарантированный `unlockDocument()` в деструкторе);
-   - если lock mode выключен — тик пропускается, если документ не в состоянии
-     `eIsIdle` (`acDocManager->isDocumentIdle()`);
+   - состояние lock mode определяется через системную переменную `LOCKMODE`
+     (`acedGetVar`, API, доступный во всех поддерживаемых версиях ObjectARX);
+   - если document lock mode включён (`LOCKMODE != 0`) — активный документ
+     залочивается на запись RAII-обёрткой `TrinityDocLock`
+     (`acDocManager->lockDocument()` / гарантированный `unlockDocument()`
+     в деструкторе);
+   - если lock mode выключен (`LOCKMODE == 0`, явный `lockDocument()` в этом
+     режиме возвращает ошибку) — тик пропускается, если документ не в
+     состоянии `AcAp::kDocIdle` (`acDocManager->documentState()`);
    - lock не получен (документ занят) — запись НЕ выполняется, ждём след. тик;
    - callback вызывается внутри SEH `__try/__except` — падение тика не уносит
      весь AutoCAD.

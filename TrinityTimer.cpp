@@ -87,22 +87,33 @@ void trnDispatchTick()
 {
     if (!g_trnCallback) return;
 
-    // Если в AutoCAD включён document lock mode, сам механизм локов
+    // Проверяем, включён ли в AutoCAD document lock mode (системная
+    // переменная LOCKMODE <> 0). Если включён — сам механизм локов
     // обеспечивает корректную сериализацию доступа к документу.
-    // Если же lock mode ОТКЛЮЧЁН (например, монопольный доступ другого
-    // приложения), попытка lockDocument недопустима — работать можно
-    // только когда документ простаивает (idle). В этом случае проверяем
-    // состояние и при занятости пропускаем тик.
     AcApDocument* pDoc = acDocManager->curDocument();
     if (!pDoc) return;
 
-    if (!acDocManager->isLockModeEnabled()) {
-        AcApDocument::DocumentStatus st = acDocManager->isDocumentIdle(pDoc);
-        if (st != AcApDocument::eIsIdle) {
-            // eIsNotIdle / eIsLocked / eIsBeingDestroyed —
-            // писать в документ НЕЛЬЗЯ, пропускаем тик.
+    resbuf* rb = acedGetVar(L"LOCKMODE", NULL);
+    const bool lockModeEnabled = (rb != NULL &&
+                                  rb->restype == RTSHORT &&
+                                  rb->resval.rint != 0);
+    if (rb) acutRelRb(rb);
+
+    if (!lockModeEnabled) {
+        // Lock mode ОТКЛЮЧЁН (LOCKMODE = 0): писать в документ можно
+        // только когда он полностью простаивает. Единственный легальный
+        // статус для начала работы — kDocIdle (документ не выполняет
+        // команду, не регенерируется, не разрушается). При любом другом
+        // состоянии пропускаем тик и ждём следующий.
+        if (acDocManager->documentState(pDoc) != AcAp::kDocIdle) {
             return;
         }
+        // В этом режиме явный lockDocument() недопустим (Acad::eLockModeOff),
+        // но доступ к документу уже сериализован: наш тик обработан на
+        // главном потоке AutoCAD из очереди его сообщений, значит другой
+        // контекст сейчас не активен. Работаем без лока.
+        trnRunCallback();
+        return;
     }
 
     // ГЛАВНАЯ ЗАЩИТА: write-lock документа на время всей работы с БД.
