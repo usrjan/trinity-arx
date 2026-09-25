@@ -3,6 +3,20 @@
 #include "StdAfx.h"
 
 // ============================================
+// MySQL C API — используется ТОЛЬКО стабильный публичный C API libmysql
+// (идентичен в Connector/C 5.7 и 8.x): mysql_init / mysql_options /
+// mysql_real_connect / mysql_close / mysql_ping / mysql_query /
+// mysql_store_result / mysql_fetch_row / mysql_free_result / mysql_num_rows /
+// mysql_errno / mysql_error / mysql_real_escape_string / mysql_set_character_set.
+// my_bool и MYSQL_OPT_RECONNECT НЕ используются (в Connector/C 8.0 удалены).
+// Заголовок mysql.h подключается в StdAfx.h; если он не найден — компиляция
+// прервётся с понятным сообщением (#error) и инструкцией по установке.
+// ============================================
+#ifndef TRINITY_HAS_MYSQL
+#define TRINITY_HAS_MYSQL 1
+#endif
+
+// ============================================
 // ПОЗИЦИЯ
 // ============================================
 struct TrinityPosition {

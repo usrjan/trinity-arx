@@ -8,9 +8,30 @@
 #include <tchar.h>
 
 // ============================================
-// MySQL
+// MySQL — C API (libmysql / mysqlclient)
 // ============================================
-#include <mysql.h>
+// Требуется ТОЛЬКО клиентская библиотека (Connector/C 8.x или 5.7): заголовки + libmysql.lib.
+// Сервер MySQL отдельно ставить НЕ нужно — он работает на хосте 192.168.30.5.
+// Путь к include задаётся в Trinity.vcxproj: D:\devel\MySQL\include
+// (или переопределите через переменную окружения MYSQL_INCLUDE_DIR).
+#ifdef TRINITY_HAS_MYSQL
+#undef TRINITY_HAS_MYSQL
+#endif
+#if defined(__has_include)
+#  if __has_include(<mysql.h>)
+#    include <mysql.h>
+#    define TRINITY_HAS_MYSQL 1
+#  elif __has_include(<mysql/mysql.h>)
+#    include <mysql/mysql.h>
+#    define TRINITY_HAS_MYSQL 1
+#  else
+#    error "MySQL client headers not found. Install MySQL Connector/C and add its \\include folder to Additional Include Directories (Trinity.vcxproj -> C/C++ -> General), e.g. D:\\devel\\MySQL\\include"
+#  endif
+#else
+// MSVC < 19.20 без __has_include: пробуем напрямую
+#  include <mysql.h>
+#  define TRINITY_HAS_MYSQL 1
+#endif
 
 // ============================================
 // AutoCAD ObjectARX 2026 — Основные

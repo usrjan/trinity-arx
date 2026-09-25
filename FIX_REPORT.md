@@ -249,3 +249,35 @@ mysql.h (MYSQL_VERSION_ID=80430 → ветка 8.0; без определени�
 ### Проверка
 Синтаксис изменённых фрагментов проверен g++ -std=c++17 -Wall -Wextra против заглушки
 mysql.h conectora 8.0 (без my_bool, MYSQL_OPT_RECONNECT отсутствует в enum) — OK.
+
+## Уточнение: MySQL Connector/C НЕ установлен (ошибки C1083 mysql.h / C2065 my_bool)
+**Дата:** 2026-09-25. **Файлы:** StdAfx.h, TrinityCore.h, Trinity.vcxproj.
+
+### Ситуация
+Сервер MySQL 8.0.46 работает на хосте 192.168.30.5 — отдельно ставить сервер не нужно.
+Но для КОМПИЛЯЦИИ плагина на машине разработчика обязательна клиентская библиотека
+MySQL Connector/C (заголовки mysql.h + libmysql.lib/.dll): без неё компилятор не видит
+типы MYSQL/MYSQL_ROW/MYSQL_RES и функции mysql_* — отсюда все C2065.
+
+### Что сделано
+1. **StdAfx.h**: подключение mysql.h через `__has_include` с понятным `#error`
+   «MySQL client headers not found…» и инструкцией вместо каскада непонятных ошибок;
+   добавлена поддержка варианта `<mysql/mysql.h>` (Debian-style layout).
+2. **TrinityCore.h**: макрос TRINITY_HAS_MYSQL + комментарий-справочник: код использует
+   только стабильный C API libmysql (идентичен в 5.7 и 8.x); my_bool/MYSQL_OPT_RECONNECT не используются.
+3. **Trinity.vcxproj**: пути к MySQL вынесены в свойства MysqlIncludeDir/MysqlLibDir
+   (по умолчанию D:\devel\MySQL\{include,lib}, переопределяются переменными окружения
+   MYSQL_INCLUDE_DIR / MYSQL_LIB_DIR) — больше не нужно править проект при переносе SDK.
+
+### Инструкция по установке Connector/C (Windows x64)
+1. Скачать «Connector/C» (не «Complete» и не сервер!) с dev.mysql.com/downloads/connector/c/
+   — GA 8.4.x или архив 8.0.x (winx64, ZIP Archive). Версия клиента обратимо совместима
+   с сервером 8.0.46; API-код менять не придётся.
+2. Распаковать, например, в C:\mysql-connector-c\ (нужны папки include\ и lib\).
+3. В Visual Studio: Project Properties → C/C++ → General → Additional Include Directories
+   добавить <путь>\include; Linker → General → Additional Library Directories — <путь>\lib.
+   (Либо задать переменные окружения MYSQL_INCLUDE_DIR / MYSQL_LIB_DIR.)
+4. Убедиться, что libmysql.dll (из <путь>\lib) доступна в PATH рядом с acad.exe — иначе
+   .arx загрузится, но mysql_init() упадёт в рантайме.
+5. Альтернатива без скачивания: если стоит MySQL Server 8.0 как сервис, его установщик уже
+   включает C:\Program Files\MySQL\MySQL Server 8.0\include и \lib — просто указать эти пути.

@@ -37,6 +37,14 @@
     <Import Project="D:\devel\ObjectARX\inc\arx.props" />
   </ImportGroup>
   <PropertyGroup Label="UserMacros" />
+  <!-- Пути к MySQL Connector/C: по умолчанию D:\devel\MySQL, можно переопределить
+       переменной окружения MYSQL_INCLUDE_DIR / MYSQL_LIB_DIR (например, в .vcxproj.user) -->
+  <PropertyGroup>
+    <MysqlIncludeDir Condition="'$(MysqlIncludeDir)'==''">$(MYSQL_INCLUDE_DIR)</MysqlIncludeDir>
+    <MysqlLibDir Condition="'$(MysqlLibDir)'==''">$(MYSQL_LIB_DIR)</MysqlLibDir>
+    <MysqlIncludeDir Condition="'$(MysqlIncludeDir)'==''">D:\devel\MySQL\include</MysqlIncludeDir>
+    <MysqlLibDir Condition="'$(MysqlLibDir)'==''">D:\devel\MySQL\lib</MysqlLibDir>
+  </PropertyGroup>
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">
     <OutDir>$(SolutionDir)x64\$(Configuration)\</OutDir>
     <TargetName>_Trinity</TargetName>
@@ -47,7 +55,7 @@
   </PropertyGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">
     <ClCompile>
-      <AdditionalIncludeDirectories>D:\devel\ObjectARX\inc;D:\devel\MySQL\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>D:\devel\ObjectARX\inc;$(MysqlIncludeDir);%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
       <PreprocessorDefinitions>RADPACK;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <PrecompiledHeader>Use</PrecompiledHeader>
       <PrecompiledHeaderFile>stdafx.h</PrecompiledHeaderFile>
@@ -56,7 +64,7 @@
       <AdditionalUsingDirectories>D:\devel\ObjectARX\inc-x64;%(AdditionalUsingDirectories)</AdditionalUsingDirectories>
     </ClCompile>
     <Link>
-      <AdditionalLibraryDirectories>D:\devel\ObjectARX\lib-x64;D:\devel\MySQL\lib;%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
+      <AdditionalLibraryDirectories>D:\devel\ObjectARX\lib-x64;$(MysqlLibDir);%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
       <AdditionalDependencies>acgeoment.lib;libmysql.lib;%(AdditionalDependencies)</AdditionalDependencies>
       <ModuleDefinitionFile>D:\devel\ObjectARX\inc\AcRxDefault.def</ModuleDefinitionFile>
       <TargetMachine>MachineX64</TargetMachine>
@@ -66,7 +74,7 @@
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'">
     <ClCompile>
       <InlineFunctionExpansion>OnlyExplicitInline</InlineFunctionExpansion>
-      <AdditionalIncludeDirectories>D:\devel\ObjectARX\inc;D:\devel\MySQL\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>D:\devel\ObjectARX\inc;$(MysqlIncludeDir);%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
       <PreprocessorDefinitions>RADPACK;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <PrecompiledHeader>Use</PrecompiledHeader>
       <PrecompiledHeaderFile>stdafx.h</PrecompiledHeaderFile>
@@ -74,7 +82,7 @@
       <AdditionalOptions>/Zc:__cplusplus %(AdditionalOptions)</AdditionalOptions>
     </ClCompile>
     <Link>
-      <AdditionalLibraryDirectories>D:\devel\ObjectARX\lib;D:\devel\MySQL\lib;%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
+      <AdditionalLibraryDirectories>D:\devel\ObjectARX\lib;$(MysqlLibDir);%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
       <AdditionalDependencies>libmysql.lib;%(AdditionalDependencies)</AdditionalDependencies>
       <ModuleDefinitionFile>D:\devel\ObjectARX\inc\AcRxDefault.def</ModuleDefinitionFile>
       <TargetMachine>MachineX64</TargetMachine>
