@@ -20,6 +20,35 @@ std::string TrinityFileManager::getFilePath(const std::string& code, const std::
     return m_basePath + "\\" + subdir + "\\" + code + ".dwg";
 }
 
+bool TrinityFileManager::deleteDwgWithLocks(const std::string& code, const std::string& subdir) const {
+    // AutoCAD при открытии/присоединении DWG создаёт lock-файлы <имя>.dwl и <имя>.dwl2.
+    // При работе через side-database (readDwgFile/attachXref) они могут оставаться
+    // в папках details/assemblies/projects — удаляем их вместе с основным файлом.
+    const std::string base = getFilePath(code, subdir);   // ...\CODE.dwg
+
+    bool mainOk = true;
+    if (_access(base.c_str(), 0) == 0) {
+        mainOk = (_unlink(base.c_str()) == 0);
+    }
+
+    // Побочные lock-файлы: "<code>.dwg" -> "<code>.dwl" / "<code>.dwl2"
+    std::string dwl  = base.substr(0, base.size() - 4) + ".dwl";   // .dwg -> .dwl
+    std::string dwl2 = base.substr(0, base.size() - 4) + ".dwl2";  // .dwg -> .dwl2
+
+    for (const std::string& lock : { dwl, dwl2 }) {
+        if (_access(lock.c_str(), 0) != 0) continue;       // нет файла — нечего удалять
+        // Lock-файлы иногда помечены как read-only или удерживаются ещё мгновение —
+        // снимаем атрибут и повторяем попытку после короткой паузы.
+        if (_unlink(lock.c_str()) != 0) {
+            _chmod(lock.c_str(), _S_IWRITE);
+            Sleep(100);
+            _unlink(lock.c_str());
+        }
+    }
+
+    return mainOk;
+}
+
 AcDbDatabase* TrinityFileManager::createEmptyDwg() {
     return new AcDbDatabase(Adesk::kTrue, Adesk::kTrue);
 }
@@ -29,12 +58,23 @@ bool TrinityFileManager::saveDwg(AcDbDatabase* db, const std::string& path) {
     MultiByteToWideChar(CP_UTF8, 0, path.c_str(), -1, pathW, 512);
 
     Acad::ErrorStatus es = db->saveAs(pathW);
-    if (es == Acad::eOk) {
-        //acutPrintf(_T("\n[FileManager] Saved: %s\n"), pathW);
-        return true;
+    if (es != Acad::eOk) {
+        acutPrintf(_T("\n[FileManager] Save failed: %s (error %d)\n"), pathW, es);
+        return false;
     }
-    acutPrintf(_T("\n[FileManager] Save failed: %s (error %d)\n"), pathW, es);
-    return false;
+
+    // NB: saveAs() привязывает базу к новому файлу — AutoCAD создаёт lock-файлы
+    // <имя>.dwl / <имя>.dwl2 и держит их, пока база открыта. Без явного закрытия
+    // они оставались в details/assemblies даже после delete db и удаления DWG.
+    // Закрытие базы (delete) снимает блокировки и удаляет *.dwl/*.dwl2.
+    es = db->close();
+    if (es != Acad::eOk) {
+        acutPrintf(_T("\n[FileManager] close after save failed (error %d), trying closeAll()\n"), es);
+        if (db->closeAll() != Acad::eOk) {
+            acutPrintf(_T("\n[FileManager] closeAll also failed — lock files may remain: %s\n"), pathW);
+        }
+    }
+    return true;
 }
 
 AcDbObjectId TrinityFileManager::attachXref(
