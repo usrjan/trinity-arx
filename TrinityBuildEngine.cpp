@@ -85,13 +85,8 @@ AcDbObjectId TrinityBuildEngine::ensureExists(const std::string& code,
         return AcDbObjectId::kNull;
     }
 
-    // 5. Сохраняем. У AcDbDatabase нет close()/closeAll() — блокировки
-    // *.dwl/*.dwl2 снимаются при уничтожении базы (delete), поэтому после
-    // успешного сохранения обязательно delete cleanDb.
-    if (!m_files.saveDwg(cleanDb, filePath)) {
-        delete cleanDb;
-        return AcDbObjectId::kNull;
-    }
+    // 5. Сохраняем
+    m_files.saveDwg(cleanDb, filePath);
     delete cleanDb;
 
     // Пауза для файловой системы
@@ -475,13 +470,8 @@ std::string TrinityBuildEngine::ensureFileExists(const std::string& code, int de
 
     if (!db) return "";
 
-    // Сохраняем. У AcDbDatabase нет close()/closeAll() — блокировки
-    // *.dwl/*.dwl2 снимаются при уничтожении базы (delete), поэтому после
-    // успешного сохранения обязательно delete db.
-    if (!m_files.saveDwg(db, filePath)) {
-        delete db;
-        return "";
-    }
+    // Сохраняем
+    m_files.saveDwg(db, filePath);
     delete db;
     Sleep(200);
 
@@ -547,12 +537,14 @@ void TrinityBuildEngine::deleteProjectFiles(const std::string& code) {
         subdir = m_files.projectsDir();
     }
 
-    // Удаляем файл и lock-файлы (*.dwl, *.dwl2), если они существуют.
-    // AutoCAD создаёт их при открытии/присоединении DWG (attachXref через
-    // readDwgFile) и не всегда убирает — иначе в details/assemblies остаётся мусор.
-    if (m_files.fileExists(neuron.code, subdir)) {
-        m_files.deleteDwgWithLocks(neuron.code, subdir);
+    std::string filePath = m_files.getFilePath(neuron.code, subdir);
 
+    // Удаляем файл, если он существует
+    if (m_files.fileExists(neuron.code, subdir)) {
+        wchar_t pathW[512];
+        MultiByteToWideChar(CP_UTF8, 0, filePath.c_str(), -1, pathW, 512);
+        _wunlink(pathW);
+        
         wchar_t* wCode = utf2uni(neuron.code.c_str());
         acutPrintf(_T("\n[BuildEngine] Deleted file: %s.dwg\n"), wCode);
         free(wCode);
