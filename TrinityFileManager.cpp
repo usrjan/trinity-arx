@@ -129,11 +129,11 @@ AcDbObjectId TrinityFileManager::attachXref(
 
     // Шаг 2: Если блока нет — читаем файл и вставляем
     if (blockId == AcDbObjectId::kNull) {
-        AcDbDatabase* pXrefDb = new (std::nothrow) AcDbDatabase(Adesk::kTrue, Adesk::kTrue);
-        if (!pXrefDb) {
-            acutPrintf(_T("\n[FileManager] Out of memory: cannot create Xref database\n"));
-            return AcDbObjectId::kNull;
-        }
+        // NB: ObjectARX переопределяет operator new для AcDbDatabase (AcHeapOperators),
+        // который не поддерживает placement-форму std::nothrow (ошибка C2661).
+        // При реальном OOM ARX-аллокатор выбрасывает/завершает работу сам,
+        // поэтому проверка !pXrefDb здесь не требуется.
+        AcDbDatabase* pXrefDb = new AcDbDatabase(Adesk::kTrue, Adesk::kTrue);
         es = pXrefDb->readDwgFile(pathW);
 
         if (es == Acad::eOk) {
