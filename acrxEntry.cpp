@@ -18,7 +18,11 @@ void initApp() {
         _T("TPROCESS"), _T("TPROCESS"),
         ACRX_CMD_MODAL, trinityProcess);
 
-    acutPrintf(_T("\n[Trinity] Plugin loaded. TSTART / TSTOP / TPROCESS\n"));
+    acedRegCmds->addCommand(_T("TRINITY_COMMANDS"),
+        _T("TRIB"), _T("TRIB"),
+        ACRX_CMD_MODAL, trinityRib);
+
+    acutPrintf(_T("\n[Trinity] Plugin loaded. TSTART / TSTOP / TPROCESS / TRIB\n"));
 }
 
 // ============================================

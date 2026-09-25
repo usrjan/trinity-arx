@@ -77,3 +77,31 @@ void trinityProcess() {
         acutPrintf(_T("\n[Trinity] No pending projects.\n"));
     }
 }
+
+// ============================================
+// TRIB — отрисовать все планки (category='rib') из базы
+// ============================================
+// Команда этапа разработки: берёт из neuron все детали с
+// category='rib' и вставляет их блоками в текущий открытый чертеж.
+// Каждая планка — динамический блок: габариты (длина/высота) и
+// толщина читаются из кода D.S.<proc>.<width>.<height>.<thickness>,
+// а в палитре "Свойства" блоком можно управлять как обычным
+// (высота/ширина блока, поворот), XDATA TRINITY хранит исходные
+// метаданные детали.
+void trinityRib() {
+    if (!ensureEngine()) return;
+
+    AcDbDatabase* db = acdbHostApplicationServices()->workingDatabase();
+    if (!db) {
+        acutPrintf(_T("\n[Trinity] No working database.\n"));
+        return;
+    }
+
+    int n = g_engine->drawDetailsInDrawing(db, "rib");
+    if (n > 0) {
+        acedUpdateDisplay();
+        // Протянуть вид на результат
+        acedCommand(RTBSTR, const_cast<TCHAR*>(_T("._ZOOM")), false);
+        acedCommand(RTBSTR, const_cast<TCHAR*>(_T("_E")), false);
+    }
+}

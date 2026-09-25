@@ -35,6 +35,16 @@ public:
 
     void shutdown() { m_core.disconnect(); }
 
+    // Доступ к ядру (запросы к БД из команд разработки)
+    TrinityCore& core() { return m_core; }
+
     // Главный метод: обработать все pending-проекты
     int processAllProjects(AcDbDatabase* targetDb);
+
+    // Отрисовать все детали категории прямо в целевую базу (текущий чертеж).
+    // Каждая деталь — AcDbBlockTableRecord (блок TRIB_<code>) с геометрией
+    // и XDATA (категория, размеры, толщина), + AcDbBlockReference со
+    // стандартными параметрическими свойствами (Height/Width/Rotation).
+    // Возвращает количество вставленных блоков.
+    int drawDetailsInDrawing(AcDbDatabase* targetDb, const std::string& category);
 };
