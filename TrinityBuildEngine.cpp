@@ -133,16 +133,38 @@ AcDbDatabase* TrinityBuildEngine::buildDetail(const TrinityNeuron& detail) {
 
     // Получаем Model Space
     AcDbBlockTable* pBt = nullptr;
-    tempDb->getSymbolTable(pBt, AcDb::kForRead);
+    Acad::ErrorStatus esBt = tempDb->getSymbolTable(pBt, AcDb::kForRead);
+    if (esBt != Acad::eOk || !pBt) {
+        acutPrintf(_T("\n[BuildEngine] getSymbolTable failed: %d\n"), (int)esBt);
+        delete solid;
+        delete tempDb;
+        return nullptr;
+    }
+
     AcDbBlockTableRecord* pMs = nullptr;
-    pBt->getAt(ACDB_MODEL_SPACE, pMs, AcDb::kForWrite);
-    pBt->close();
+    Acad::ErrorStatus esMs = pBt->getAt(ACDB_MODEL_SPACE, pMs, AcDb::kForWrite);
+    pBt->close();  // закрываем таблицу сразу — она больше не нужна
+
+    if (esMs != Acad::eOk || !pMs) {
+        acutPrintf(_T("\n[BuildEngine] getModelSpace failed: %d\n"), (int)esMs);
+        delete solid;
+        delete tempDb;
+        return nullptr;
+    }
 
     AcDbObjectIdArray ids;
 
     // Добавляем солид (но НЕ закрываем — нужен для booleanOper)
     AcDbObjectId solidId;
-    pMs->appendAcDbEntity(solidId, solid);
+    Acad::ErrorStatus esApp = pMs->appendAcDbEntity(solidId, solid);
+    if (esApp != Acad::eOk) {
+        acutPrintf(_T("\n[BuildEngine] appendAcDbEntity(solid) failed: %d\n"), (int)esApp);
+        solid->close();
+        pMs->close();
+        delete solid;
+        delete tempDb;
+        return nullptr;
+    }
 
     // ============================================================
     // БОЛТЫ ДЛЯ ПЛАНОК
@@ -203,7 +225,10 @@ AcDbDatabase* TrinityBuildEngine::buildDetail(const TrinityNeuron& detail) {
             mat.setTranslation(AcGeVector3d(pos.x, pos.y, detail.thickness / 2.0));
             pCylinder->transformBy(mat);
 
-            Acad::ErrorStatus es = solid->booleanOper(AcDb::kBoolSubtract, pCylinder);
+            Acad::ErrorStatus esBool = solid->booleanOper(AcDb::kBoolSubtract, pCylinder);
+            if (esBool != Acad::eOk) {
+                acutPrintf(_T("\n[BuildEngine] booleanOper failed: %d\n"), (int)esBool);
+            }
 
             // После booleanOper цилиндр либо NULL solid, либо невалиден
             // Освобождаем память — НЕ вызываем erase()
@@ -214,7 +239,10 @@ AcDbDatabase* TrinityBuildEngine::buildDetail(const TrinityNeuron& detail) {
     // ============================================================
     // ЗАКРЫВАЕМ СОЛИД ПОСЛЕ ВСЕХ ОПЕРАЦИЙ
     // ============================================================
-    solid->close();
+    Acad::ErrorStatus esSolidClose = solid->close();
+    if (esSolidClose != Acad::eOk) {
+        acutPrintf(_T("\n[BuildEngine] solid->close() failed: %d\n"), (int)esSolidClose);
+    }
     ids.append(solidId);
 
     // ============================================================
@@ -226,7 +254,11 @@ AcDbDatabase* TrinityBuildEngine::buildDetail(const TrinityNeuron& detail) {
         ids.append(attrId);
     }
 
-    pMs->close();
+    // Model Space закрываем ПОСЛЕДНИМ — все сущности уже закрыты
+    Acad::ErrorStatus esMsClose = pMs->close();
+    if (esMsClose != Acad::eOk) {
+        acutPrintf(_T("\n[BuildEngine] pMs->close() failed: %d\n"), (int)esMsClose);
+    }
 
     // ============================================================
     // WBLOCK → чистая база
@@ -255,10 +287,22 @@ AcDbDatabase* TrinityBuildEngine::buildDetail(const TrinityNeuron& detail) {
     // ПЕРЕНАЗНАЧАЕМ СЛОИ ОБЪЕКТАМ
     // ============================================================
     AcDbBlockTable* pBt2 = nullptr;
-    cleanDb->getSymbolTable(pBt2, AcDb::kForRead);
+    Acad::ErrorStatus esBt2 = cleanDb->getSymbolTable(pBt2, AcDb::kForRead);
+    if (esBt2 != Acad::eOk || !pBt2) {
+        acutPrintf(_T("\n[BuildEngine] getSymbolTable(cleanDb) failed: %d\n"), (int)esBt2);
+        delete cleanDb;
+        return nullptr;
+    }
+
     AcDbBlockTableRecord* pMs2 = nullptr;
-    pBt2->getAt(ACDB_MODEL_SPACE, pMs2, AcDb::kForWrite);
-    pBt2->close();
+    Acad::ErrorStatus esMs2 = pBt2->getAt(ACDB_MODEL_SPACE, pMs2, AcDb::kForWrite);
+    pBt2->close();  // таблицу закрываем сразу, до работы с BTR
+
+    if (esMs2 != Acad::eOk || !pMs2) {
+        acutPrintf(_T("\n[BuildEngine] getModelSpace(cleanDb) failed: %d\n"), (int)esMs2);
+        delete cleanDb;
+        return nullptr;
+    }
 
     AcDbBlockTableRecordIterator* pIter = nullptr;
     pMs2->newIterator(pIter);
