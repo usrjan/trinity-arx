@@ -19,6 +19,21 @@ namespace {
     constexpr unsigned MYSQL_CONNECT_TIMEOUT_S = 5;
     constexpr double   MIN_PING_INTERVAL_S     = 30;    // мин. интервал между mysql_ping, сек
 
+    // Тип флага для MYSQL_OPT_RECONNECT зависит от версии клиента MySQL:
+    //   - в старом C API (< 8.0) аргумент mysql_options() имел тип my_bool (unsigned char);
+    //   - начиная с MySQL Connector/C 8.0 typedef my_bool удалён из mysql.h,
+    //     и опция ожидает bool.
+    // MYSQL_VERSION_ID определяется в mysql_version.h (подключается через mysql.h).
+    // Для коннектора 8.0.46: MYSQL_VERSION_ID == 80046 -> используется bool.
+#if defined(MYSQL_VERSION_ID) && MYSQL_VERSION_ID >= 80000
+    using MySqlReconnectFlag = bool;
+    constexpr MySqlReconnectFlag MYSQL_RECONNECT_FLAG_ON = true;
+#else
+    // MySQL/MariaDB клиентских библиотек до 8.0: my_bool ещё объявлен в mysql.h
+    using MySqlReconnectFlag = my_bool;
+    constexpr MySqlReconnectFlag MYSQL_RECONNECT_FLAG_ON = 1;
+#endif
+
     // Ошибки MySQL, означающие обрыв / потерю соединения (нужно переподключаться).
     // Сравниваем по числовым кодам (errmsg.h), т.к. в разных версиях коннектора
     // имена/значения части констант различаются.
@@ -66,13 +81,7 @@ bool TrinityCore::connect(const char* host, const char* user,
 
     // Разрешаем клиенту самим пересылать запросы при потере соединения.
     // Это подстраховка: наш ensureConnected() делает явный пинг и переподключение.
-    // Тип аргумента: my_bool (typedef unsigned char) удалён из mysql.h в коннекторе 8.0,
-    // где mysql_options(...) для MYSQL_OPT_RECONNECT ожидает bool.
-#if defined(MYSQL_VERSION_ID) && MYSQL_VERSION_ID >= 60000 || defined(MARIADB_BASE_VERSION) || defined(MARIADB_VERSION_ID)
-    my_bool reconnectFlag = 1;
-#else
-    bool reconnectFlag = true;
-#endif
+    MySqlReconnectFlag reconnectFlag = MYSQL_RECONNECT_FLAG_ON;
     mysql_options(m_mysql, MYSQL_OPT_RECONNECT, &reconnectFlag);
 
     if (!mysql_real_connect(m_mysql, m_host.c_str(), m_user.c_str(),
@@ -128,11 +137,7 @@ bool TrinityCore::reconnect(int maxAttempts, unsigned delayMs) {
         mysql_options(m_mysql, MYSQL_OPT_READ_TIMEOUT, &timeout);
         timeout = MYSQL_WRITE_TIMEOUT_S;
         mysql_options(m_mysql, MYSQL_OPT_WRITE_TIMEOUT, &timeout);
-#if defined(MYSQL_VERSION_ID) && MYSQL_VERSION_ID >= 60000 || defined(MARIADB_BASE_VERSION) || defined(MARIADB_VERSION_ID)
-        my_bool reconnectFlag = 1;
-#else
-        bool reconnectFlag = true;
-#endif
+        MySqlReconnectFlag reconnectFlag = MYSQL_RECONNECT_FLAG_ON;
         mysql_options(m_mysql, MYSQL_OPT_RECONNECT, &reconnectFlag);
 
         if (mysql_real_connect(m_mysql, m_host.c_str(), m_user.c_str(),
