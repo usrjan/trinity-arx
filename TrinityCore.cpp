@@ -4,6 +4,65 @@
 #include <ctime>   // time_t / time() — троттлинг mysql_ping в ensureConnected()
 
 // ============================================
+// СБОРКА БЕЗ MYSQL CLIENT (mysql.h не найден)
+// ============================================
+// Если на машине разработки нет клиентской библиотеки MySQL, StdAfx.h
+// определяет TRINITY_HAS_MYSQL = 0. Чтобы проект при этом всё равно
+// собирался (как раньше), ниже — заглушки модуля БД: все функции
+// возвращают «нет подключения» и печатают одно понятное сообщение.
+// Установите Connector/C ZIP и укажите путь MysqlIncludeDir в vcxproj,
+// чтобы включить реальный доступ к базе.
+#if !defined(TRINITY_HAS_MYSQL) || (TRINITY_HAS_MYSQL == 0)
+
+namespace {
+    void warnNoMysql() {
+        static bool warned = false;
+        if (!warned) {
+            warned = true;
+            acutPrintf(_T("\n[TrinityCore] MySQL client library is not installed on this machine.\n"));
+            acutPrintf(_T("[TrinityCore] Database features are disabled. Install MySQL Connector/C (ZIP)\n"));
+            acutPrintf(_T("[TrinityCore] and set MysqlIncludeDir/MysqlLibDir in Trinity.vcxproj, then rebuild.\n"));
+        }
+    }
+}
+
+TrinityCore::~TrinityCore() {}
+
+bool TrinityCore::connect(const char*, const char*, const char*, const char*) {
+    warnNoMysql();
+    return false;
+}
+void TrinityCore::disconnect() {}
+bool TrinityCore::reconnect(int, unsigned) { return false; }
+bool TrinityCore::ensureConnected() { return false; }
+bool TrinityCore::recoverQuery(const char*) { return false; }
+
+std::string TrinityCore::escapeSqlLiteral(const std::string& value, bool emptyMeansNull) const {
+    (void)emptyMeansNull;
+    // Без mysql_real_escape_string экранируем минимально: одинарные кавычки
+    // удваиваем, обратные слеши удваиваем — литерал в SQL не «сломается».
+    std::string out;
+    out.reserve(value.size() + 8);
+    for (char c : value) {
+        if (c == '\'')      out += "''";
+        else if (c == '\\') out += "\\\\";
+        else                out += c;
+    }
+    return out;
+}
+
+TrinityNeuron* TrinityCore::loadNeuronByCode(const std::string&) { warnNoMysql(); return nullptr; }
+TrinityNeuron* TrinityCore::loadNeuronById(int)                  { warnNoMysql(); return nullptr; }
+std::vector<TrinitySynapse> TrinityCore::loadChildren(int)       { warnNoMysql(); return {}; }
+std::vector<TrinityNeuron>  TrinityCore::loadPendingProjects()   { warnNoMysql(); return {}; }
+bool TrinityCore::markNeuronDone(int)                            { warnNoMysql(); return false; }
+
+TrinityNeuron TrinityCore::parseNeuronRow(MYSQL_ROW)   { return {}; }
+TrinitySynapse TrinityCore::parseSynapseRow(MYSQL_ROW) { return {}; }
+
+#else // ==================== ПОЛНАЯ РЕАЛИЗАЦИЯ С MYSQL ====================
+
+// ============================================
 // КОНСТРУКТОР / ДЕСТРУКТОР
 // ============================================
 TrinityCore::~TrinityCore() { disconnect(); }
@@ -18,6 +77,11 @@ namespace {
     constexpr unsigned MYSQL_WRITE_TIMEOUT_S  = 10;     // соединение определялось быстрее
     constexpr unsigned MYSQL_CONNECT_TIMEOUT_S = 5;
     constexpr double   MIN_PING_INTERVAL_S     = 30;    // мин. интервал между mysql_ping, сек
+
+// Примечание по версии клиента: в MySQL Connector/C 8.0 typedef my_bool удалён из
+// mysql.h, а опция MYSQL_OPT_RECONNECT — из enum_mysql_sock_option (не поддерживается).
+// Поэтому переподключение реализовано на уровне приложения (ensureConnected/reconnect),
+// и тип my_bool в этом файле не используется нигде.
 
     // Ошибки MySQL, означающие обрыв / потерю соединения (нужно переподключаться).
     // Сравниваем по числовым кодам (errmsg.h), т.к. в разных версиях коннектора
@@ -58,16 +122,15 @@ bool TrinityCore::connect(const char* host, const char* user,
     // Таймауты сокета: без них запрос к оборванному соединению может «висеть» минутами
     // (по умолчанию wait_timeout сервера + TCP-ретраи).
     unsigned timeout = MYSQL_CONNECT_TIMEOUT_S;
-    mysql_options(m_mysql, MYSQL_OPT_CONNECT_TIMEOUT, &timeout);
+    mysql_options(m_mysql, MYSQL_OPT_CONNECT_TIMEOUT, static_cast<const void*>(&timeout));
     timeout = MYSQL_READ_TIMEOUT_S;
-    mysql_options(m_mysql, MYSQL_OPT_READ_TIMEOUT, &timeout);
+    mysql_options(m_mysql, MYSQL_OPT_READ_TIMEOUT, static_cast<const void*>(&timeout));
     timeout = MYSQL_WRITE_TIMEOUT_S;
-    mysql_options(m_mysql, MYSQL_OPT_WRITE_TIMEOUT, &timeout);
+    mysql_options(m_mysql, MYSQL_OPT_WRITE_TIMEOUT, static_cast<const void*>(&timeout));
 
-    // Разрешаем клиенту самим пересылать запросы при потере соединения.
-    // Это подстраховка: наш ensureConnected() делает явный пинг и переподключение.
-    my_bool reconnectFlag = 1;
-    mysql_options(m_mysql, MYSQL_OPT_RECONNECT, &reconnectFlag);
+    // Примечание: MYSQL_OPT_RECONNECT в MySQL Connector/C 8.0 НЕ поддерживается
+    // (константа удалена из enum_mysql_sock_option). Автоматическое восстановление
+    // после обрыва полностью обеспечивают наши ensureConnected() / reconnect().
 
     if (!mysql_real_connect(m_mysql, m_host.c_str(), m_user.c_str(),
                             m_pass.c_str(), m_db.c_str(), 0, nullptr, 0)) {
@@ -117,13 +180,13 @@ bool TrinityCore::reconnect(int maxAttempts, unsigned delayMs) {
         if (!m_mysql) return false;
 
         unsigned timeout = MYSQL_CONNECT_TIMEOUT_S;
-        mysql_options(m_mysql, MYSQL_OPT_CONNECT_TIMEOUT, &timeout);
+        mysql_options(m_mysql, MYSQL_OPT_CONNECT_TIMEOUT, static_cast<const void*>(&timeout));
         timeout = MYSQL_READ_TIMEOUT_S;
-        mysql_options(m_mysql, MYSQL_OPT_READ_TIMEOUT, &timeout);
+        mysql_options(m_mysql, MYSQL_OPT_READ_TIMEOUT, static_cast<const void*>(&timeout));
         timeout = MYSQL_WRITE_TIMEOUT_S;
-        mysql_options(m_mysql, MYSQL_OPT_WRITE_TIMEOUT, &timeout);
-        my_bool reconnectFlag = 1;
-        mysql_options(m_mysql, MYSQL_OPT_RECONNECT, &reconnectFlag);
+        mysql_options(m_mysql, MYSQL_OPT_WRITE_TIMEOUT, static_cast<const void*>(&timeout));
+        // MYSQL_OPT_RECONNECT в Connector/C 8.0 не поддерживается —
+        // повторное соединение выполняется этим reconnect() (цикл попыток выше).
 
         if (mysql_real_connect(m_mysql, m_host.c_str(), m_user.c_str(),
                                m_pass.c_str(), m_db.c_str(), 0, nullptr, 0)) {
@@ -503,3 +566,4 @@ TrinityRotationCompound TrinityCore::parseRotation(const std::string& json) {
 
     return compound;
 }
+#endif // TRINITY_HAS_MYSQL
