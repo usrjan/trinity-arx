@@ -2,13 +2,25 @@
 #include "StdAfx.h"
 #include "TrinityCommands.h"
 #include "TrinityConfig.h"
+#include "TrinityTimer.h"   // безопасный таймер с document lock (см. TrinityTimer.h)
 
 TrinityBuildEngine* g_engine = nullptr;
 UINT_PTR g_timerId = 0;
 
+// Флаг «тик идёт прямо сейчас». Защита от наложения: если обработка
+// предыдущего тика ещё не завершилась (долгая сборка), новые тики
+// пропускаются, а не залезают в БД поверх работающего движка.
+static bool g_isProcessing = false;
+
 // ============================================
 // CALLBACK ТАЙМЕРА
 // ============================================
+// ВАЖНО: этот вызов приходит НЕ из колбэка SetTimer, а из обработчика
+// WM_TRINITY_TICK на главном потоке AutoCAD, и активный документ УЖЕ
+// залочен на запись (write-lock) внутри TrinityTimer. Именно поэтому
+// здесь легально обращаться к workingDatabase() и модифицировать её.
+// Запись в документ без этого лога нарушала протокол AutoCAD и приводила
+// к Access Violation (крах acad.exe).
 void CALLBACK TimerProc(HWND, UINT, UINT_PTR, DWORD) {
     trinityProcess();
 }
@@ -47,9 +59,20 @@ void trinityStart() {
         return;
     }
 
-    g_timerId = SetTimer(NULL, NULL, 5000, TimerProc);
+    // Безопасный таймер: тик приходит в message pump главного потока
+    // AutoCAD, активный документ залочен на запись (см. TrinityTimer.cpp).
+    // Прямой SetTimer(NULL, ...) с записью в БД без lock нарушал протокол
+    // AutoCAD и вызывал Access Violation.
+    g_timerId = StartTrinityTimer(5000, TimerProc);
 
-    acutPrintf(_T("\n[Trinity] Timer started. Every 5 seconds.\n"));
+    if (g_timerId == 0) {
+        acutPrintf(_T("\n[Trinity] Failed to start timer.\n"));
+        delete g_engine;
+        g_engine = nullptr;
+        return;
+    }
+
+    acutPrintf(_T("\n[Trinity] Timer started. Every 5 seconds (document-lock protected).\n"));
 }
 
 // ============================================
@@ -58,7 +81,7 @@ void trinityStart() {
 void trinityStop() {
     // Сначала останавливаем таймер
     if (g_timerId != 0) {
-        KillTimer(NULL, g_timerId);
+        StopTrinityTimer();
         g_timerId = 0;
     }
 
@@ -75,11 +98,24 @@ void trinityStop() {
 // ============================================
 // ОБРАБОТКА ОДНОГО ТИКА
 // ============================================
+// Вызывается ТОЛЬКО из TimerProc, то есть с главного потока AutoCAD
+// при захваченном write-lock активного документа (гарантия TrinityTimer).
+// Именно поэтому здесь разрешено брать workingDatabase() и писать в неё.
 void trinityProcess() {
     if (!g_engine) return;
 
-    AcDbDatabase* db = acdbHostApplicationServices()->workingDatabase();
-    int processed = g_engine->processAllProjects(db);
+    // Защита от реентерабельности/наложения тиков (долгая сборка > интервала).
+    if (g_isProcessing) return;
+    g_isProcessing = true;
 
-    if (processed > 0) acedUpdateDisplay();
+    __try {
+        AcDbDatabase* db = acdbHostApplicationServices()->workingDatabase();
+        int processed = g_engine->processAllProjects(db);
+
+        // Обновление дисплея — тоже легально: мы под локом, на главном потоке.
+        if (processed > 0) acedUpdateDisplay();
+    }
+    __finally {
+        g_isProcessing = false;
+    }
 }

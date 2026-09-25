@@ -95,6 +95,7 @@
     <ClCompile Include="TrinityFileManager.cpp" />
     <ClCompile Include="TrinityGeometryBuilder.cpp" />
     <ClCompile Include="TrinityLayerManager.cpp" />
+    <ClCompile Include="TrinityTimer.cpp" />
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="TrinityAttributeBuilder.h" />
@@ -105,6 +106,7 @@
     <ClInclude Include="TrinityFileManager.h" />
     <ClInclude Include="TrinityGeometryBuilder.h" />
     <ClInclude Include="TrinityLayerManager.h" />
+    <ClInclude Include="TrinityTimer.h" />
     <ClInclude Include="stdafx.h" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
