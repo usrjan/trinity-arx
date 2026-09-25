@@ -21,9 +21,7 @@ private:
     // Построить DWG конструкции/проекта из детей
     // Дети вставляются как XREF во временную базу,
     // потом wblock в чистую базу
-    // outBuiltId: если non-null и сборка успешна — сюда записывается id нейрона;
-    // пометка "done" ставится только после успешной вставки XREF этого файла.
-    AcDbDatabase* buildDwg(const TrinityNeuron& neuron, int depth, int* outBuiltId = nullptr);
+    AcDbDatabase* buildDwg(const TrinityNeuron& neuron, int depth);
 
     // Построить DWG детали (конечный уровень)
     // Геометрия → временная база → wblock → чистая база
@@ -32,9 +30,7 @@ private:
     // Обеспечить существование файла детали/конструкции
     // Без вставки XREF. Возвращает путь к файлу.
     // Используется в buildDwg для рекурсивной подготовки детей.
-    // doneId: если non-null — при успешной вставке XREF ребёнка id нейрона
-    // сохраняется сюда (пометка "done" ставится только после XREF).
-    std::string ensureFileExists(const std::string& code, int depth = 0, int* doneId = nullptr);
+    std::string ensureFileExists(const std::string& code, int depth = 0);
 
     // Рекурсивное удаление файлов проекта и всех его детей
     void deleteProjectFiles(const std::string& code);
