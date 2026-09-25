@@ -87,6 +87,11 @@ public:
     // Статусы
     bool markNeuronDone(int id);
 
+    // Экранирование строки для безопасной подстановки в SQL (учитывает кодировку соединения).
+    // Возвращает готовый литерал с кавычками: 'escaped\'text' — подставляется в запрос как есть.
+    // Пустая строка -> NULL (для необязательных параметров).
+    std::string escapeSqlLiteral(const std::string& value, bool emptyMeansNull = false) const;
+
     // Парсинг
     static TrinityNeuron parseNeuronRow(MYSQL_ROW row);
     static TrinitySynapse parseSynapseRow(MYSQL_ROW row);
