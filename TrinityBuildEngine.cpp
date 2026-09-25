@@ -385,6 +385,10 @@ AcDbDatabase* TrinityBuildEngine::buildDetail(const TrinityNeuron& detail) {
 
     pMs2->close();
 
+    // ВАЖНО (фикс «висячих» *.dwl / *.dwl2): wblock() выставляет у чистой базы
+    // флаг "editing" — без close()/saveAs() блокировка не снимается.
+    cleanDb->discardEditing();
+
     // Финальный отчёт
     /*
     wchar_t* wCode = utf2uni(detail.code.c_str());
@@ -453,6 +457,10 @@ AcDbDatabase* TrinityBuildEngine::buildDwg(const TrinityNeuron& neuron, int dept
         delete cleanDb;
         return nullptr;
     }
+
+    // ВАЖНО (фикс «висячих» *.dwl / *.dwl2): wblock() выставляет у новой базы
+    // флаг "editing" — без close()/saveAs() блокировка не снимается.
+    cleanDb->discardEditing();
 
     return cleanDb;
 }
