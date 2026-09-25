@@ -29,34 +29,12 @@ bool TrinityFileManager::saveDwg(AcDbDatabase* db, const std::string& path) {
     MultiByteToWideChar(CP_UTF8, 0, path.c_str(), -1, pathW, 512);
 
     Acad::ErrorStatus es = db->saveAs(pathW);
-    if (es != Acad::eOk) {
-        acutPrintf(_T("\n[FileManager] Save failed: %s (error %d)\n"), pathW, es);
-        return false;
+    if (es == Acad::eOk) {
+        //acutPrintf(_T("\n[FileManager] Saved: %s\n"), pathW);
+        return true;
     }
-
-    // ВАЖНО (фикс «висячих» *.dwl / *.dwl2): saveAs() только пишет файл —
-    // он НЕ сбрасывает флаг "editing" и НЕ снимает блокировку DWG. Пока база
-    // считается редактируемой, AutoCAD держит lock-файлы.
-    //
-    // Реальный API ObjectARX (dbmain.h): у AcDbDatabase НЕТ методов
-    // discardEditing()/unsetOwner()/closeDwgFile() — это методы AcDbObject /
-    // редактора, а не базы. Правильный способ закрыть базу-документ —
-    // freeThreadedData() (безопасен в любом потоке, в отличие от close()).
-    //
-    // Вызывающий код (ensureFileExists) после saveDwg делает delete db,
-    // поэтому здесь закрываем блокировку ДО удаления:
-    //   - если база стала текущим документом (saveAs мог зарегистрировать
-    //     её в аксе), freeThreadedData() снимает ownership и закрывает
-    //     DWG-ресурс вместе с *.dwl/*.dwl2;
-    //   - если база не являлась документом, freeThreadedData() вернёт
-    //     ошибку без побочных эффектов — блокировок она не держала.
-    es = db->freeThreadedData();
-    if (es != Acad::eOk) {
-        acutPrintf(_T("\n[FileManager] freeThreadedData after save failed: %s (error %d)\n"), pathW, es);
-    }
-
-    //acutPrintf(_T("\n[FileManager] Saved: %s\n"), pathW);
-    return true;
+    acutPrintf(_T("\n[FileManager] Save failed: %s (error %d)\n"), pathW, es);
+    return false;
 }
 
 AcDbObjectId TrinityFileManager::attachXref(
@@ -143,44 +121,27 @@ AcDbObjectId TrinityFileManager::attachXref(
     // Шаг 2: Если блока нет — читаем файл и вставляем
     if (blockId == AcDbObjectId::kNull) {
         AcDbDatabase* pXrefDb = new AcDbDatabase(Adesk::kTrue, Adesk::kTrue);
-        // kOpenReadOnly — читаем без захвата на запись: не создаются *.dwl/*.dwl2
-        es = pXrefDb->readDwgFile(pathW, AcDbDatabase::kOpenReadOnly);
+        es = pXrefDb->readDwgFile(pathW);
 
-        // ВАЖНО (фикс «висячих» *.dwl / *.dwl2): readDwgFile(..., kOpenReadOnly)
-        // открывает файл без захвата записи — блокировки не создаются.
-        // У AcDbDatabase нет метода close() (это метод AcDbObject, см. dbmain.h),
-        // поэтому вместо него — корректный флаг доступа + delete (деструктор
-        // сам освобождает все ресурсы базы).
         if (es == Acad::eOk) {
             es = targetDb->insert(blockId, nameW, pXrefDb, true);
             wasInserted = (es == Acad::eOk);
         }
-        // ВАЖНО (фикс Access Violation): раньше здесь был безусловно
-        // вызываемый `delete pXrefDb` ПОСЛЕ успешного insert(..., attachOnLoad=true).
-        // При attachOnLoad база-источник становится собственностью BlockTableRecord
-        // целевой базы, и её ручное удаление = use-after-free / двойное freed
-        // при закрытии целевой базы (Fatal Error). Освобождаем pXrefDb ТОЛЬКО
-        // когда вставка не состоялась (база осталась нашей).
-        if (es != Acad::eOk) {
-            delete pXrefDb;
-        }
+        delete pXrefDb;
 
         // Шаг 3: ОБРАБОТКА РЕЗУЛЬТАТА
         if (es == Acad::eDuplicateKey) {
-            // Блок уже есть (гонка или скрытый блок) — получаем его ID.
-            // ВАЖНО: проверка pBt на nullptr — getSymbolTable мог упасть,
-            // разыменование нулевого указателя = Fatal Error / AV.
+            // Блок уже есть (гонка или скрытый блок) — получаем его ID
             AcDbBlockTable* pBt = nullptr;
-            if (targetDb->getSymbolTable(pBt, AcDb::kForRead) == Acad::eOk && pBt) {
-                if (pBt->has(nameW)) {
-                    pBt->getAt(nameW, blockId);
-                }
-                pBt->close();
+            targetDb->getSymbolTable(pBt, AcDb::kForRead);
+            if (pBt->has(nameW)) {
+                pBt->getAt(nameW, blockId);
             }
+            pBt->close();
             wasInserted = true;
         }
         else if (es != Acad::eOk) {
-            acutPrintf(_T("\n[FileManager] Insert failed (error %d)\n"), (int)es);
+            acutPrintf(_T("\n[FileManager] Insert failed (error %d)\n"), es);
             return AcDbObjectId::kNull;
         }
     }
@@ -214,16 +175,9 @@ AcDbObjectId TrinityFileManager::attachXref(
         return AcDbObjectId::kNull;
     }
 
-    // ВАЖНО (фикс Access Violation): mat.setTranslation() ПОЛНОСТЬЮ ЗАМЕНЯЕТ
-    // матрицу (все её части, включая вращение), а не дописывает перевод.
-    // Раньше цикл накопления `mat = mat * rotMat` затирался последней строкой,
-    // и вращение терялось; при нулевом/мусорном accum-матрице transformBy
-    // на открытой сущности мог уронить AutoCAD. Теперь перевод добавляется
-    // УМНОЖЕНИЕМ после вращения: итог = T * R1 * R2 ...
-    AcGeMatrix3d mat;
-    mat.setToIdentity();
-
     if (rot.count > 0) {
+        AcGeMatrix3d mat;
+        mat.setToIdentity();
         for (int i = 0; i < rot.count; i++) {
             const auto& r = rot.rotations[i];
             if (r.angle != 0) {
@@ -232,17 +186,12 @@ AcDbObjectId TrinityFileManager::attachXref(
                     axis.normalize();
                     AcGeMatrix3d rotMat;
                     rotMat.setToRotation(r.angle * M_PI / 180.0, axis, pos);
-                    mat = rotMat * mat;
+                    mat = mat * rotMat;
                 }
             }
         }
+        pRef->transformBy(mat);
     }
-
-    AcGeMatrix3d transMat;
-    transMat.setToTranslation(AcGeVector3d(pos.x, pos.y, pos.z));
-    mat = transMat * mat;
-
-    pRef->transformBy(mat);
 
     AcDbObjectId refId;
     es = pMs->appendAcDbEntity(refId, pRef);

@@ -1,7 +1,6 @@
 // TrinityAttributeBuilder.cpp
 #include "StdAfx.h"
 #include "TrinityAttributeBuilder.h"
-#include "TrinityLayerManager.h"
 
 // ============================================
 // ДОБАВИТЬ АТРИБУТ С КОДОМ ДЕТАЛИ
@@ -32,7 +31,7 @@ AcDbObjectId TrinityAttributeBuilder::addDetailCode(
     pAttdef->setVerifiable(Adesk::kFalse);
     pAttdef->setPreset(Adesk::kFalse);
 
-    pAttdef->setLayer(TrinityLayerManager::LAYER_TAG_W);
+    pAttdef->setLayer(_T("_tag"));
 
     AcDbObjectId attrId;
     pRecord->appendAcDbEntity(attrId, pAttdef);
@@ -42,9 +41,29 @@ AcDbObjectId TrinityAttributeBuilder::addDetailCode(
 }
 
 // ============================================
-// СЛОЙ _tag — дубликат удалён: общая логика в TrinityLayerManager
-// (тонкая обёртка для сохранения публичного API этого класса)
+// СЛОЙ _tag
 // ============================================
 void TrinityAttributeBuilder::ensureTagLayer(AcDbDatabase* db) {
-    TrinityLayerManager::ensureTagLayer(db);
+    if (!db) return;
+
+    AcDbLayerTable* pLayerTable = nullptr;
+    Acad::ErrorStatus es = db->getSymbolTable(pLayerTable, AcDb::kForWrite);
+    if (es != Acad::eOk) return;
+
+    if (!pLayerTable->has(_T("_tag"))) {
+        AcDbLayerTableRecord* pRecord = new AcDbLayerTableRecord();
+        pRecord->setName(_T("_tag"));
+
+        AcCmColor color;
+        color.setColorIndex(1);
+        pRecord->setColor(color);
+        pRecord->setIsOff(true);
+
+        // НЕКОНСТАНТНАЯ переменная для add()
+        AcDbObjectId layerId = AcDbObjectId::kNull;
+        pLayerTable->add(layerId, pRecord);
+        pRecord->close();
+    }
+
+    pLayerTable->close();
 }
