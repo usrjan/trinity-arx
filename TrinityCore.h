@@ -84,9 +84,6 @@ public:
     // Проекты
     std::vector<TrinityNeuron> loadPendingProjects();
 
-    // Детали по категории (shield, rib, sidewall, ...)
-    std::vector<TrinityNeuron> loadDetailsByCategory(const std::string& category);
-
     // Статусы
     bool markNeuronDone(int id);
 

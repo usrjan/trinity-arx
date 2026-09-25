@@ -57,7 +57,7 @@
     </ClCompile>
     <Link>
       <AdditionalLibraryDirectories>D:\devel\ObjectARX\lib-x64;D:\devel\MySQL\lib;%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
-      <AdditionalDependencies>accore.lib;acad.lib;acui25.lib;adui25.lib;acpal.lib;acdb25.lib;acge25.lib;acgiapi.lib;acISMobj25.lib;rxapi.lib;acgeoment25.lib;libmysql.lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <AdditionalDependencies>acgeoment.lib;libmysql.lib;%(AdditionalDependencies)</AdditionalDependencies>
       <ModuleDefinitionFile>D:\devel\ObjectARX\inc\AcRxDefault.def</ModuleDefinitionFile>
       <TargetMachine>MachineX64</TargetMachine>
       <AdditionalOptions>/ignore:4099 %(AdditionalOptions)</AdditionalOptions>
@@ -74,8 +74,8 @@
       <AdditionalOptions>/Zc:__cplusplus %(AdditionalOptions)</AdditionalOptions>
     </ClCompile>
     <Link>
-      <AdditionalLibraryDirectories>D:\devel\ObjectARX\lib-x64;D:\devel\MySQL\lib;%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
-      <AdditionalDependencies>accore.lib;acad.lib;acui25.lib;adui25.lib;acpal.lib;acdb25.lib;acge25.lib;acgiapi.lib;acISMobj25.lib;rxapi.lib;acgeoment25.lib;libmysql.lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <AdditionalLibraryDirectories>D:\devel\ObjectARX\lib;D:\devel\MySQL\lib;%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
+      <AdditionalDependencies>libmysql.lib;%(AdditionalDependencies)</AdditionalDependencies>
       <ModuleDefinitionFile>D:\devel\ObjectARX\inc\AcRxDefault.def</ModuleDefinitionFile>
       <TargetMachine>MachineX64</TargetMachine>
       <AdditionalOptions>/ignore:4099 %(AdditionalOptions)</AdditionalOptions>
