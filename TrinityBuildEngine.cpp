@@ -370,7 +370,7 @@ AcDbDatabase* TrinityBuildEngine::buildDetail(const TrinityNeuron& detail) {
 //      - собрать ObjectId в массив
 //   3. wblock → cleanDb
 // ============================================================
-AcDbDatabase* TrinityBuildEngine::buildDwg(const TrinityNeuron& neuron, int depth) {
+AcDbDatabase* TrinityBuildEngine::buildDwg(const TrinityNeuron& neuron, int depth, int* outBuiltId) {
     if (neuron.type == "detail") {
         return buildDetail(neuron);
     }
@@ -398,7 +398,8 @@ AcDbDatabase* TrinityBuildEngine::buildDwg(const TrinityNeuron& neuron, int dept
         free(wChild);
         */
 
-        std::string childFilePath = ensureFileExists(syn.childCode, depth + 1);
+        int builtChildId = -1;
+        std::string childFilePath = ensureFileExists(syn.childCode, depth + 1, &builtChildId);
         if (childFilePath.empty()) {
             acutPrintf(_T("\n[BuildEngine] ensureFileExists returned EMPTY\n"));
             continue;
@@ -412,6 +413,10 @@ AcDbDatabase* TrinityBuildEngine::buildDwg(const TrinityNeuron& neuron, int dept
 
         if (childId != AcDbObjectId::kNull) {
             ids.append(childId);
+            // Пометка "done" — ТОЛЬКО после успешной вставки XREF
+            if (builtChildId >= 0) {
+                m_core.markNeuronDone(builtChildId);
+            }
             //acutPrintf(_T("\n[BuildEngine] XREF appended to ids\n"));
         }
         else {
@@ -439,6 +444,10 @@ AcDbDatabase* TrinityBuildEngine::buildDwg(const TrinityNeuron& neuron, int dept
         return nullptr;
     }
 
+    // Файл будет создан (сохранён в ensureExists/ensureFileExists), но пометку
+    // "done" здесь НЕ ставим — статус переносится только после успешной вставки XREF.
+    if (outBuiltId) *outBuiltId = neuron.id;
+
     return cleanDb;
 }
 
@@ -448,7 +457,7 @@ AcDbDatabase* TrinityBuildEngine::buildDwg(const TrinityNeuron& neuron, int dept
 // Используется внутри buildDwg для рекурсивной подготовки детей.
 // Возвращает путь к файлу или пустую строку при ошибке.
 // ============================================================
-std::string TrinityBuildEngine::ensureFileExists(const std::string& code, int depth) {
+std::string TrinityBuildEngine::ensureFileExists(const std::string& code, int depth, int* doneId) {
     // Защита от бесконечной рекурсии
     if (depth > 20) {
         wchar_t* wCode = utf2uni(code.c_str());
@@ -483,14 +492,17 @@ std::string TrinityBuildEngine::ensureFileExists(const std::string& code, int de
     AcDbDatabase* db = nullptr;
     if (neuron.type == "detail") {
         db = buildDetail(neuron);
+        // id нейрона-детали нужен для пометки "done" после вставки XREF
+        if (db && doneId) *doneId = neuron.id;
     }
     else {
-        db = buildDwg(neuron, depth);
+        db = buildDwg(neuron, depth, doneId);
     }
 
     if (!db) return "";
 
-    // Сохраняем
+    // Сохраняем — файл создан, но "done" НЕ ставим:
+    // статус переносится вызывающим кодом только после успешной вставки XREF.
     m_files.saveDwg(db, filePath);
     delete db;
     Sleep(200);
@@ -515,8 +527,9 @@ int TrinityBuildEngine::processAllProjects(AcDbDatabase* targetDb) {
         // Это гарантирует, что сборка начнётся с чистого листа
         deleteProjectFiles(proj.code);
 
-        // Создаём файл проекта (рекурсивно)
-        std::string actualPath = ensureFileExists(proj.code, 0);
+        // Создаём файл проекта (рекурсивно). builtId != -1, если файл был построен заново.
+        int builtId = -1;
+        std::string actualPath = ensureFileExists(proj.code, 0, &builtId);
 
         if (actualPath.empty()) {
             wchar_t* wCode = utf2uni(proj.code.c_str());
@@ -525,8 +538,25 @@ int TrinityBuildEngine::processAllProjects(AcDbDatabase* targetDb) {
             continue;
         }
 
-        // Отмечаем done — файл создан
-        m_core.markNeuronDone(proj.id);
+        // Вставляем XREF готового файла проекта в целевую базу.
+        // Пометку "done" переносим ТОЛЬКО после успешной вставки XREF,
+        // а не сразу после создания файла.
+        AcDbObjectId xrefId = m_files.attachXref(
+            actualPath, proj.code, AcGePoint3d::kOrigin,
+            TrinityRotationCompound(), targetDb);
+
+        if (xrefId == AcDbObjectId::kNull) {
+            wchar_t* wCode = utf2uni(proj.code.c_str());
+            acutPrintf(_T("\n[BuildEngine] attachXref failed for project: %s (not marked done)\n"), wCode);
+            free(wCode);
+            continue;
+        }
+
+        // XREF вставлен успешно — теперь можно отмечать done
+        // (для только что построенных файлов; id уже помеченных/существующих = -1)
+        if (builtId >= 0) {
+            m_core.markNeuronDone(builtId);
+        }
 
         wchar_t* wCode = utf2uni(proj.code.c_str());
         acutPrintf(_T("\n[BuildEngine] Project done: %s\n"), wCode);
