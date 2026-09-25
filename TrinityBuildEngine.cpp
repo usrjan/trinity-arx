@@ -85,14 +85,14 @@ AcDbObjectId TrinityBuildEngine::ensureExists(const std::string& code,
         return AcDbObjectId::kNull;
     }
 
-    // 5. Сохраняем. NB: saveDwg() закрывает базу через db->close() —
-    // именно закрытие удаляет lock-файлы *.dwl/*.dwl2 рядом с сохранённым DWG.
+    // 5. Сохраняем. У AcDbDatabase нет close()/closeAll() — блокировки
+    // *.dwl/*.dwl2 снимаются при уничтожении базы (delete), поэтому после
+    // успешного сохранения обязательно delete cleanDb.
     if (!m_files.saveDwg(cleanDb, filePath)) {
-        delete cleanDb;   // база осталась открытой после неудачного saveAs — освобождаем сами
+        delete cleanDb;
         return AcDbObjectId::kNull;
     }
-    // Успешное saveDwg уже закрыло базу (db->close()) — delete НЕ вызываем,
-    // чтобы не закрыть повторно уже закрытую базу (eWasNotOpen / AV).
+    delete cleanDb;
 
     // Пауза для файловой системы
     Sleep(200);
@@ -475,13 +475,14 @@ std::string TrinityBuildEngine::ensureFileExists(const std::string& code, int de
 
     if (!db) return "";
 
-    // Сохраняем. NB: saveDwg() теперь сама закрывает базу (db->close()) —
-    // именно закрытие удаляет lock-файлы *.dwl/*.dwl2 рядом с сохранённым DWG.
-    // Поэтому здесь НЕ вызываем delete db (повторное закрытие уже закрытой базы).
+    // Сохраняем. У AcDbDatabase нет close()/closeAll() — блокировки
+    // *.dwl/*.dwl2 снимаются при уничтожении базы (delete), поэтому после
+    // успешного сохранения обязательно delete db.
     if (!m_files.saveDwg(db, filePath)) {
-        delete db;   // база осталась открытой после неудачного saveAs — освобождаем сами
+        delete db;
         return "";
     }
+    delete db;
     Sleep(200);
 
     return filePath;
