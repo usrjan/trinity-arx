@@ -1,6 +1,7 @@
 // TrinityCommands.cpp
 #include "StdAfx.h"
 #include "TrinityCommands.h"
+#include "TrinityConfig.h"
 
 TrinityBuildEngine* g_engine = nullptr;
 UINT_PTR g_timerId = 0;
@@ -28,10 +29,18 @@ void trinityStart() {
         g_engine = nullptr;
     }
 
-    // Создаём новый движок
-    g_engine = new TrinityBuildEngine("D:\\trinity");
+    // Загружаем настройки из trinity.ini в папке библиотеки
+    TrinityDbConfig cfg;
+    if (!loadTrinityConfig(cfg)) {
+        acutPrintf(_T("\n[Trinity] Config load failed. Startup aborted.\n"));
+        return;
+    }
 
-    if (!g_engine->init("10.250.11.112", "webdev", "1QAZxsw2", "trinity_core")) {
+    // Создаём новый движок
+    g_engine = new TrinityBuildEngine(cfg.basePath);
+
+    if (!g_engine->init(cfg.host.c_str(), cfg.user.c_str(),
+                        cfg.pass.c_str(), cfg.db.c_str())) {
         acutPrintf(_T("\n[Trinity] Failed to connect to database\n"));
         delete g_engine;
         g_engine = nullptr;

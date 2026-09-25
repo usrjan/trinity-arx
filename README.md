@@ -76,11 +76,20 @@ TrinityARX читает **нейроны** и **синапсы** из MySQL и �
 
 ## Настройка базы
 
-Файл `.env` (или прямо в коде `TrinityCommands.cpp`):
+Учетные данные **не хранятся в коде**. Создайте файл `trinity.ini` в папке с `_Trinity.arx` (образец — `trinity.ini.example`):
 
-```cpp
-g_engine->init("10.250.11.112", "webdev", "1QAZxsw2", "trinity_core");
+```ini
+[database]
+host     = 10.250.11.112
+user     = webdev
+password = <ваш_пароль>
+database = trinity_core
+
+[paths]
+base = D:\trinity
 ```
+
+Файл `trinity.ini` добавлен в `.gitignore` и не коммитится.
 
 **Структура БД:** таблицы `neuron`, `synapse`, `text`.
 
