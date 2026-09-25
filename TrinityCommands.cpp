@@ -91,7 +91,9 @@ void trinityStart() {
 // --------------------------------------------
 // Регистрация команд
 // --------------------------------------------
-void registerCommand(const ACHAR* name, ACRX_CMD callback) {
+// ACRX_CMD — не тип, а макрос-каст: #define ACRX_CMD(f) ((AFUN)f)
+// Поэтому параметр-указатель на функцию объявляется как AdAppFunction.
+void registerCommand(const ACHAR* name, AdAppFunction callback) {
     acedRegCmds->addCommand(_T("TRINITY_COMMANDS"), name, name,
                             ACRX_CMD_MODAL, callback);
 }
@@ -99,8 +101,9 @@ void registerCommand(const ACHAR* name, ACRX_CMD callback) {
 } // namespace
 
 void trinityRegisterCommands() {
-    registerCommand(_T("TSTART"), reinterpret_cast<ACRX_CMD>(&trinityStart));
-    registerCommand(_T("TSTOP"),  reinterpret_cast<ACRX_CMD>(&trinityStop));
+    // void(*)() -> AdAppFunction (int(*)()) — легитимный cast для ARX-колбэков
+    registerCommand(_T("TSTART"), reinterpret_cast<AdAppFunction>(&trinityStart));
+    registerCommand(_T("TSTOP"),  reinterpret_cast<AdAppFunction>(&trinityStop));
 }
 
 // Вызывается из acrxEntry при выгрузке приложения

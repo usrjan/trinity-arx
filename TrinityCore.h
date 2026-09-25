@@ -105,22 +105,44 @@ public:
     // Размеры из JSON, либо из кода вида D.<T>.<proc>.<W>.<H>.<Th>
     static void applyGeometry(TrinityNeuron& n);
 
-private:
-    // RAII-обёртка над MYSQL_RES
-    struct QueryResult {
-        MYSQL*     mysql  = nullptr;
-        MYSQL_RES* result = nullptr;
-        ~QueryResult();
-        QueryResult(const QueryResult&) = delete;
-        QueryResult& operator=(const QueryResult&) = delete;
-        bool ok() const { return result != nullptr; }
-        explicit operator bool() const { return ok(); }
+    // ----------------------------------------
+    // RAII-обёртка над prepared statement.
+    // Чтение результата — через fetch()/bindResult().
+    // ----------------------------------------
+    class Stmt {
+    public:
+        Stmt() = default;
+        ~Stmt();
+
+        Stmt(const Stmt&) = delete;
+        Stmt& operator=(const Stmt&) = delete;
+
+        bool prepare(MYSQL* mysql, const char* sql);
+        bool bindParams(const std::vector<MYSQL_BIND>& params);
+        bool executeStore();                      // execute + store_result
+        my_ulonglong numRows() const;
+        bool bindResult(std::vector<MYSQL_BIND> binds);
+        bool fetch();                             // false = конец выборки
+        void freeResult();
+
+        MYSQL_STMT* handle() const { return m_stmt; }
+
+    private:
+        MYSQL*      m_mysql = nullptr;
+        MYSQL_STMT* m_stmt  = nullptr;
     };
 
+    // Подготовка + привязка входных параметров + execute + store_result.
+    // true, если запрос выполнен (в т.ч. 0 строк).
     bool runPrepared(const char* stmtText,
                      const std::vector<MYSQL_BIND>& params,
-                     QueryResult& out);
+                     Stmt& out);
 
+    // Помощники для заполнения MYSQL_BIND (input)
+    static MYSQL_BIND bindString(const char* data, unsigned long& lenInOut);
+    static MYSQL_BIND bindLongLong(longlong& value);
+
+private:
     // Общий SELECT нейронов по условию
     TrinityNeuronPtr loadNeuronWhere(const char* whereSql,
                                      const std::vector<std::string>& strParams,
