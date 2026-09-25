@@ -1,0 +1,11 @@
+; Trinity — конфигурация (копируется как trinity.ini в папку с ARX-библиотекой)
+; ВНИМАНИЕ: trinity.ini должен быть добавлен в .gitignore и НЕ коммититься!
+
+[database]
+host     = 10.250.11.112
+user     = webdev
+password = CHANGE_ME
+database = trinity_core
+
+[paths]
+base = D:\trinity
