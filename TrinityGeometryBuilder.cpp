@@ -144,17 +144,42 @@ AcDb3dSolid* TrinityGeometryBuilder::buildRib(const TrinityNeuron& d) {
     pPoly->explode(lines);
     AcDbVoidPtrArray regions;
     AcDbRegion::createFromCurves(lines, regions);
-    assert(regions.length() == 1);
+
+    // ВАЖНО (фикс Access Violation): раньше здесь были assert() — в Release-сборке
+    // они выключены, и при пустом массиве regions[0] читался мусорный указатель,
+    // а AcDbRegion::cast по нему = AV. Проверяем явно и выходим безопасно.
+    if (regions.length() != 1) {
+        acutPrintf(_T("\n[GeometryBuilder] createFromCurves failed: regions=%d\n"),
+                   (int)regions.length());
+        for (int i = 0; i < lines.length(); i++) delete (AcRxObject*)lines[i];
+        for (int i = 0; i < regions.length(); i++) delete (AcRxObject*)regions[i];
+        delete pPoly;   // полилиния НЕ состоит в базе — удаляем напрямую
+        return nullptr;
+    }
     AcDbRegion* pRegion = AcDbRegion::cast((AcRxObject*)regions[0]);
-    assert(pRegion != NULL);
-    pPoly->erase();
-    pPoly->close();
+    if (pRegion == NULL) {
+        acutPrintf(_T("\n[GeometryBuilder] region cast failed\n"));
+        for (int i = 0; i < lines.length(); i++) delete (AcRxObject*)lines[i];
+        for (int i = 0; i < regions.length(); i++) delete (AcRxObject*)regions[i];
+        delete pPoly;
+        return nullptr;
+    }
+    // ВАЖНО: erase() перед close() бессмысленен для объекта вне базы (нет ownerId)
+    // и оставляет его «висящим» в памяти. Полилиния не добавлялась ни в одну
+    // базу — освобождаем её корректным delete().
+    delete pPoly;
 
     AcDb3dSolid* solid = new AcDb3dSolid();
-    solid->extrude(pRegion, T, 0.0);
+    Acad::ErrorStatus esExt = solid->extrude(pRegion, T, 0.0);
 
     for (int i = 0; i < lines.length(); i++) delete (AcRxObject*)lines[i];
     for (int i = 0; i < regions.length(); i++) delete (AcRxObject*)regions[i];
+
+    if (esExt != Acad::eOk) {
+        acutPrintf(_T("\n[GeometryBuilder] extrude failed: %d\n"), (int)esExt);
+        delete solid;
+        return nullptr;
+    }
 
     solid->setLayer(layerName);
 
@@ -172,15 +197,34 @@ AcDb3dSolid* TrinityGeometryBuilder::extrudeProfile(const AcGePoint3dArray& pts,
     AcDbVoidPtrArray lines, regions;
     pPoly->explode(lines);
     AcDbRegion::createFromCurves(lines, regions);
+
+    // Фикс Access Violation: явная проверка вместо assert (в Release assert выключен,
+    // regions[0] при пустом массиве = чтение мусора -> AV в cast/extrude).
+    if (regions.length() != 1) {
+        for (int i = 0; i < lines.length(); i++) delete (AcRxObject*)lines[i];
+        for (int i = 0; i < regions.length(); i++) delete (AcRxObject*)regions[i];
+        delete pPoly;   // объект вне базы — освобожаем напрямую
+        return nullptr;
+    }
     AcDbRegion* pRegion = AcDbRegion::cast((AcRxObject*)regions[0]);
-    pPoly->erase();
-    pPoly->close();
+    if (pRegion == NULL) {
+        for (int i = 0; i < lines.length(); i++) delete (AcRxObject*)lines[i];
+        for (int i = 0; i < regions.length(); i++) delete (AcRxObject*)regions[i];
+        delete pPoly;
+        return nullptr;
+    }
+    delete pPoly;       // вместо некорректного erase()+close() для объекта вне базы
 
     AcDb3dSolid* solid = new AcDb3dSolid();
-    solid->extrude(pRegion, height, 0.0);
+    Acad::ErrorStatus esExt = solid->extrude(pRegion, height, 0.0);
 
     for (int i = 0; i < lines.length(); i++) delete (AcRxObject*)lines[i];
     for (int i = 0; i < regions.length(); i++) delete (AcRxObject*)regions[i];
+
+    if (esExt != Acad::eOk) {
+        delete solid;
+        return nullptr;
+    }
 
     return solid;
 }
