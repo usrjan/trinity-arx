@@ -8,3 +8,6 @@
 // Реализация — в TrinityCommands.cpp.
 // ============================================
 void trinityRegisterCommands();
+
+// Остановка таймера/движка — вызывается из acrxEntry при выгрузке ARX
+void trinityShutdown();

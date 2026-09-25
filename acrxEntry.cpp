@@ -7,13 +7,14 @@
 // ============================================
 void initApp() {
     trinityRegisterCommands();
-    acutPrintf(_T("\n[Trinity] Plugin loaded. TRINITYTEST / TRINITYBUILD / TRINITYLOAD\n"));
+    acutPrintf(_T("\n[Trinity] Plugin loaded. TSTART / TSTOP\n"));
 }
 
 // ============================================
 // ВЫГРУЗКА
 // ============================================
 void unloadApp() {
+    trinityShutdown();   // остановить таймер и отключиться от БД
     acedRegCmds->removeGroup(_T("TRINITY_COMMANDS"));
 }
 
