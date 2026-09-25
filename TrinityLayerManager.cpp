@@ -3,48 +3,47 @@
 #include "TrinityLayerManager.h"
 
 // ============================================
-// ИМЯ СЛОЯ ПО МАТЕРИАЛУ
+// Имя слоя по материалу
 // ============================================
 std::string TrinityLayerManager::layerName(const std::string& materialCode) {
     return "TRINITY_MAT_" + materialCode;
 }
 
 // ============================================
-// ЦВЕТ ПО МАТЕРИАЛУ
+// Цвет ACI по материалу
 // ============================================
 int TrinityLayerManager::colorIndex(const std::string& materialCode) {
-    if (materialCode.find("PLYWOOD") != std::string::npos) return 31;   // коричневый
-    if (materialCode.find("STEEL") != std::string::npos) return 8;      // серый
-    if (materialCode.find("CONCRETE") != std::string::npos) return 254; // серый
-    if (materialCode.find("ALUMINIUM") != std::string::npos) return 9;  // серебристый
+    if (materialCode.find("PLYWOOD")  != std::string::npos) return 31;   // коричневый
+    if (materialCode.find("STEEL")    != std::string::npos) return 8;    // серый
+    if (materialCode.find("CONCRETE") != std::string::npos) return 254;  // серый
+    if (materialCode.find("ALUMINIUM")!= std::string::npos) return 9;    // серебристый
     return 7; // белый по умолчанию
 }
 
 // ============================================
-// СОЗДАТЬ ИЛИ ПОЛУЧИТЬ СЛОЙ МАТЕРИАЛА
+// Создать или получить слой материала
 // ============================================
-AcDbObjectId TrinityLayerManager::createOrGetLayer(AcDbDatabase* db, const std::string& materialCode) {
-    std::string name = layerName(materialCode);
+AcDbObjectId TrinityLayerManager::createOrGetLayer(AcDbDatabase* db,
+                                                   const std::string& materialCode) {
+    if (!db) return AcDbObjectId::kNull;
 
-    wchar_t layerNameW[256];
-    MultiByteToWideChar(CP_UTF8, 0, name.c_str(), -1, layerNameW, 256);
+    const std::wstring name = toWide(layerName(materialCode));
 
     AcDbLayerTable* pLayerTable = nullptr;
-    if (db->getSymbolTable(pLayerTable, AcDb::kForWrite) != Acad::eOk) return AcDbObjectId::kNull;
+    if (db->getSymbolTable(pLayerTable, AcDb::kForWrite) != Acad::eOk)
+        return AcDbObjectId::kNull;
 
     AcDbObjectId layerId;
-    if (!pLayerTable->has(layerNameW)) {
+    if (pLayerTable->has(name.c_str())) {
+        pLayerTable->getAt(name.c_str(), layerId);
+    } else {
         AcDbLayerTableRecord* pRecord = new AcDbLayerTableRecord();
-        pRecord->setName(layerNameW);
-
+        pRecord->setName(name.c_str());
         AcCmColor color;
-        color.setColorIndex(colorIndex(materialCode));
+        color.setColorIndex(static_cast<Adesk::UInt16>(colorIndex(materialCode)));
         pRecord->setColor(color);
-
         pLayerTable->add(layerId, pRecord);
         pRecord->close();
-    } else {
-        pLayerTable->getAt(layerNameW, layerId);
     }
 
     pLayerTable->close();
@@ -52,48 +51,33 @@ AcDbObjectId TrinityLayerManager::createOrGetLayer(AcDbDatabase* db, const std::
 }
 
 // ============================================
-// СЛОЙ _tag (красный, выключен)
+// Общий код для скрытых красных слоёв
 // ============================================
-void TrinityLayerManager::ensureTagLayer(AcDbDatabase* db) {
+void TrinityLayerManager::ensureHiddenRedLayer(AcDbDatabase* db, const wchar_t* name) {
+    if (!db) return;
+
     AcDbLayerTable* pLayerTable = nullptr;
     if (db->getSymbolTable(pLayerTable, AcDb::kForWrite) != Acad::eOk) return;
 
-    if (!pLayerTable->has(_T("_tag"))) {
+    if (!pLayerTable->has(name)) {
         AcDbLayerTableRecord* pRecord = new AcDbLayerTableRecord();
-        pRecord->setName(_T("_tag"));
-
+        pRecord->setName(name);
         AcCmColor color;
-        color.setColorIndex(1);
+        color.setColorIndex(1);          // красный
         pRecord->setColor(color);
-        pRecord->setIsOff(true);
-
-        AcDbObjectId layerId = AcDbObjectId::kNull;
+        pRecord->setIsOff(true);         // выключен
+        AcDbObjectId layerId;
         pLayerTable->add(layerId, pRecord);
         pRecord->close();
     }
 
     pLayerTable->close();
 }
-// ============================================
-// СЛОЙ _bolt (красный, выключен)
-// ============================================
+
+void TrinityLayerManager::ensureTagLayer(AcDbDatabase* db) {
+    ensureHiddenRedLayer(db, LAYER_TAG);
+}
+
 void TrinityLayerManager::ensureBoltLayer(AcDbDatabase* db) {
-    AcDbLayerTable* pLayerTable = nullptr;
-    if (db->getSymbolTable(pLayerTable, AcDb::kForWrite) != Acad::eOk) return;
-
-    if (!pLayerTable->has(_T("_bolt"))) {
-        AcDbLayerTableRecord* pRecord = new AcDbLayerTableRecord();
-        pRecord->setName(_T("_bolt"));
-
-        AcCmColor color;
-        color.setColorIndex(1);
-        pRecord->setColor(color);
-        pRecord->setIsOff(true);
-
-        AcDbObjectId layerId = AcDbObjectId::kNull;
-        pLayerTable->add(layerId, pRecord);
-        pRecord->close();
-    }
-
-    pLayerTable->close();
+    ensureHiddenRedLayer(db, LAYER_BOLT);
 }

@@ -4,46 +4,53 @@
 #include "TrinityCore.h"
 #include "TrinityFileManager.h"
 
+// ============================================
+// Рекурсивный движок сборки DWG-файлов:
+//   project → construction → detail.
+// Готовые файлы кэшируются в подкаталогах базы;
+// недостающие строятся на лету и сохраняются.
+// Движок владеет подключением к БД (init/shutdown).
+// ============================================
 class TrinityBuildEngine {
-private:
-    TrinityCore m_core;
-    TrinityFileManager m_files;
+public:
+    explicit TrinityBuildEngine(const std::string& basePath)
+        : m_files(basePath) {}
 
-    // Рекурсивное обеспечение существования DWG
-    // Если файл есть — вставляет XREF и возвращает его ID
-    // Если файла нет — строит его и потом вставляет XREF
+    bool init(const char* host, const char* user,
+              const char* pass, const char* db) {
+        return m_core.connect(host, user, pass, db);
+    }
+    void shutdown() { m_core.disconnect(); }
+
+    // Главный метод: обработать все pending-проекты.
+    int processAllProjects(AcDbDatabase* targetDb);
+
+    static constexpr int MAX_DEPTH = 20;
+
+private:
+    // Рекурсивное обеспечение существования DWG:
+    // файл есть — вставляет XREF; нет — строит и потом вставляет.
     AcDbObjectId ensureExists(const std::string& code,
-                               const AcGePoint3d& position,
-                               const TrinityRotationCompound& rotation,
-                               AcDbDatabase* targetDb,
-                               int depth = 0);
+                              const AcGePoint3d& position,
+                              const TrinityRotationCompound& rotation,
+                              AcDbDatabase* targetDb,
+                              int depth = 0);
 
     // Построить DWG конструкции/проекта из детей
-    // Дети вставляются как XREF во временную базу,
-    // потом wblock в чистую базу
+    // (дети — XREF во временную базу, затем wblock в чистую)
     AcDbDatabase* buildDwg(const TrinityNeuron& neuron, int depth);
 
-    // Построить DWG детали (конечный уровень)
-    // Геометрия → временная база → wblock → чистая база
+    // Построить DWG детали (конечный уровень):
+    // геометрия → временная база → wblock → чистая база
     AcDbDatabase* buildDetail(const TrinityNeuron& detail);
 
-    // Обеспечить существование файла детали/конструкции
-    // Без вставки XREF. Возвращает путь к файлу.
-    // Используется в buildDwg для рекурсивной подготовки детей.
+    // Обеспечить существование файла без вставки XREF.
+    // Возвращает путь ('' при ошибке). Используется в buildDwg.
     std::string ensureFileExists(const std::string& code, int depth = 0);
 
     // Рекурсивное удаление файлов проекта и всех его детей
     void deleteProjectFiles(const std::string& code);
 
-public:
-    TrinityBuildEngine(const std::string& basePath) : m_files(basePath) {}
-
-    bool init(const char* host, const char* user, const char* pass, const char* db) {
-        return m_core.connect(host, user, pass, db);
-    }
-
-    void shutdown() { m_core.disconnect(); }
-
-    // Главный метод: обработать все pending-проекты
-    int processAllProjects(AcDbDatabase* targetDb);
+    TrinityCore        m_core;
+    TrinityFileManager m_files;
 };
