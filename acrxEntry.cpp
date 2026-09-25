@@ -6,22 +6,14 @@
 // РЕГИСТРАЦИЯ КОМАНД
 // ============================================
 void initApp() {
-    acedRegCmds->addCommand(_T("TRINITY_COMMANDS"),
-        _T("TSTART"), _T("TSTART"),
-        ACRX_CMD_MODAL, trinityStart);
-
-    acedRegCmds->addCommand(_T("TRINITY_COMMANDS"),
-        _T("TSTOP"), _T("TSTOP"),
-        ACRX_CMD_MODAL, trinityStop);
-
-    acutPrintf(_T("\n[Trinity] Plugin loaded. TSTART / TSTOP\n"));
+    trinityRegisterCommands();
+    acutPrintf(_T("\n[Trinity] Plugin loaded. TRINITYTEST / TRINITYBUILD / TRINITYLOAD\n"));
 }
 
 // ============================================
 // ВЫГРУЗКА
 // ============================================
 void unloadApp() {
-    trinityStop();
     acedRegCmds->removeGroup(_T("TRINITY_COMMANDS"));
 }
 

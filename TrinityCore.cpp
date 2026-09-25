@@ -3,297 +3,390 @@
 #include "TrinityCore.h"
 
 // ============================================
-// КОНСТРУКТОР / ДЕСТРУКТОР
+// Деструкторы / RAII
 // ============================================
 TrinityCore::~TrinityCore() { disconnect(); }
 
+TrinityCore::QueryResult::~QueryResult() {
+    if (result) mysql_free_result(result);
+}
+
 // ============================================
-// ПОДКЛЮЧЕНИЕ
+// Подключение
 // ============================================
 bool TrinityCore::connect(const char* host, const char* user,
-                           const char* pass, const char* db) {
+                          const char* pass, const char* db) {
     if (m_connected) return true;
+    if (!host || !user || !db) return false;
 
     m_mysql = mysql_init(nullptr);
-    if (!mysql_real_connect(m_mysql, host, user, pass, db, 0, nullptr, 0)) {
-        acutPrintf(_T("\n[TrinityCore] Connection error: %hs\n"), mysql_error(m_mysql));
+    if (!m_mysql) {
+        trinityLog(L"[TrinityCore] mysql_init failed");
+        return false;
+    }
+
+    unsigned int timeoutSec = 5;
+    mysql_options(m_mysql, MYSQL_OPT_CONNECT_TIMEOUT, &timeoutSec);
+
+    if (!mysql_real_connect(m_mysql, host, user, pass ? pass : "",
+                            db, 0, nullptr, 0)) {
+        trinityLog(L"[TrinityCore] Connection error: %hs", mysql_error(m_mysql));
         mysql_close(m_mysql);
         m_mysql = nullptr;
         return false;
     }
 
     mysql_set_character_set(m_mysql, "utf8mb4");
-    mysql_query(m_mysql, "SET NAMES utf8mb4");
     m_connected = true;
+    trinityLog(L"[TrinityCore] Connected to %hs/%hs", host, db);
     return true;
 }
 
 void TrinityCore::disconnect() {
-    if (m_mysql && m_connected) {
+    if (m_mysql) {
         mysql_close(m_mysql);
         m_mysql = nullptr;
-        m_connected = false;
     }
+    m_connected = false;
 }
 
 // ============================================
-// ЗАГРУЗКА НЕЙРОНА ПО КОДУ
+// Выполнение prepared-запроса c буферизованным результатом
+// params — входные параметры (строки/числа); lifetime данных
+// должен переживать вызов.
 // ============================================
-TrinityNeuron* TrinityCore::loadNeuronByCode(const std::string& code) {
-    if (!m_connected) return nullptr;
+bool TrinityCore::runPrepared(const char* stmtText,
+                              const std::vector<MYSQL_BIND>& params,
+                              QueryResult& out) {
+    out.mysql = m_mysql;
+    if (!m_connected) return false;
 
-    char escapedCode[256];
-    mysql_real_escape_string(m_mysql, escapedCode, code.c_str(), (unsigned long)code.length());
+    MYSQL_STMT* stmt = mysql_stmt_init(m_mysql);
+    if (!stmt) return false;
 
-    char query[512];
-    snprintf(query, sizeof(query),
-        "SELECT id, "
-        "  JSON_UNQUOTE(JSON_EXTRACT(data, '$.code')), "
-        "  type, "
-        "  COALESCE(JSON_UNQUOTE(JSON_EXTRACT(data, '$.category')), ''), "
-        "  COALESCE(JSON_UNQUOTE(JSON_EXTRACT(data, '$.material')), 'PLYWOOD-FSF'), "
-        "  COALESCE(JSON_UNQUOTE(JSON_EXTRACT(data, '$.status')), ''), "
-        "  data "
-        "FROM neuron "
-        "WHERE JSON_UNQUOTE(JSON_EXTRACT(data, '$.code')) = '%s' "
-        "  AND is_deleted = 0 "
-        "LIMIT 1",
-        escapedCode);
+    bool ok = false;
+    do {
+        if (mysql_stmt_prepare(stmt, stmtText,
+                               static_cast<unsigned long>(strlen(stmtText))) != 0) {
+            trinityLog(L"[TrinityCore] prepare failed: %hs", mysql_stmt_error(stmt));
+            break;
+        }
 
-    if (mysql_query(m_mysql, query) != 0) return nullptr;
+        // Копируем, т.к. mysql_stmt_bind_param требует non-const указатели
+        std::vector<MYSQL_BIND> bindIn(params);
+        if (!bindIn.empty()) {
+            if (mysql_stmt_bind_param(stmt, bindIn.data()) != 0) {
+                trinityLog(L"[TrinityCore] bind_param failed: %hs", mysql_stmt_error(stmt));
+                break;
+            }
+        }
 
-    MYSQL_RES* result = mysql_store_result(m_mysql);
-    if (!result || mysql_num_rows(result) == 0) {
-        if (result) mysql_free_result(result);
-        return nullptr;
+        if (mysql_stmt_execute(stmt) != 0) {
+            trinityLog(L"[TrinityCore] execute failed: %hs", mysql_stmt_error(stmt));
+            break;
+        }
+
+        if (mysql_stmt_store_result(stmt) != 0) {
+            trinityLog(L"[TrinityCore] store_result failed: %hs", mysql_stmt_error(stmt));
+            break;
+        }
+
+        out.result = mysql_store_result(stmt);   // дублирует буферы st_store
+        mysql_stmt_close(stmt);
+        ok = (out.result != nullptr);
+        if (!ok) {
+            trinityLog(L"[TrinityCore] store_result(NULL): %hs", mysql_error(m_mysql));
+        }
+        return ok;
+    } while (false);
+
+    mysql_stmt_close(stmt);
+    return false;
+}
+
+// ============================================
+// Общий SELECT одного нейрона
+// ============================================
+static const char* kNeuronSelectColumns =
+    "SELECT id, "
+    "  COALESCE(JSON_UNQUOTE(JSON_EXTRACT(data, '$.code')), ''), "
+    "  type, "
+    "  COALESCE(JSON_UNQUOTE(JSON_EXTRACT(data, '$.category')), ''), "
+    "  COALESCE(JSON_UNQUOTE(JSON_EXTRACT(data, '$.material')), 'PLYWOOD-FSF'), "
+    "  COALESCE(JSON_UNQUOTE(JSON_EXTRACT(data, '$.status')), ''), "
+    "  COALESCE(CAST(data AS CHAR), '') "
+    "FROM neuron WHERE %s AND is_deleted = 0 LIMIT 1";
+
+TrinityNeuronPtr TrinityCore::loadNeuronWhere(const char* whereSql,
+                                              const std::vector<std::string>& strParams,
+                                              const std::vector<int>& intParams) {
+    // упрощение: только один параметр (код или id)
+    char sql[1024];
+    snprintf(sql, sizeof(sql), kNeuronSelectColumns, whereSql);
+
+    std::vector<MYSQL_BIND> params;
+    unsigned long len = 0;
+    enum TypeTag { kStr, kInt } tag = kStr;
+    longlong intValue = 0;
+
+    if (!strParams.empty()) {
+        MYSQL_BIND b{};
+        b.buffer_type = MYSQL_TYPE_STRING;
+        b.buffer = const_cast<char*>(strParams.front().c_str());
+        len = static_cast<unsigned long>(strParams.front().size());
+        b.buffer_length = &len;
+        b.is_null = nullptr;
+        params.push_back(b);
+        tag = kStr;
+    } else if (!intParams.empty()) {
+        MYSQL_BIND b{};
+        b.buffer_type = MYSQL_TYPE_LONGLONG;
+        intValue = intParams.front();
+        b.buffer_value = &intValue;
+        params.push_back(b);
+        tag = kInt;
     }
+    (void)tag;
 
-    MYSQL_ROW row = mysql_fetch_row(result);
-    TrinityNeuron* neuron = new TrinityNeuron(parseNeuronRow(row));
-    mysql_free_result(result);
+    QueryResult res;
+    if (!runPrepared(sql, params, res)) return nullptr;
+
+    TrinityNeuronPtr neuron;
+    MYSQL_ROW row = mysql_fetch_row(res.result);
+    if (row) neuron = std::make_unique<TrinityNeuron>(
+        parseNeuronRow(atoi(row[0] ? row[0] : "0"),
+                       row[1] ? row[1] : "",
+                       row[2] ? row[2] : "",
+                       row[3] ? row[3] : "",
+                       row[4] ? row[4] : "PLYWOOD-FSF",
+                       row[5] ? row[5] : "",
+                       row[6] ? row[6] : ""));
     return neuron;
 }
 
 // ============================================
-// ЗАГРУЗКА НЕЙРОНА ПО ID
+// Загрузка нейрона по коду / id
 // ============================================
-TrinityNeuron* TrinityCore::loadNeuronById(int id) {
-    if (!m_connected) return nullptr;
+TrinityNeuronPtr TrinityCore::loadNeuronByCode(const std::string& code) {
+    return loadNeuronWhere("JSON_UNQUOTE(JSON_EXTRACT(data, '$.code')) = ?",
+                           { code }, {});
+}
 
-    char query[256];
-    snprintf(query, sizeof(query),
-        "SELECT id, "
-        "  JSON_UNQUOTE(JSON_EXTRACT(data, '$.code')), "
-        "  type, "
-        "  COALESCE(JSON_UNQUOTE(JSON_EXTRACT(data, '$.category')), ''), "
-        "  COALESCE(JSON_UNQUOTE(JSON_EXTRACT(data, '$.material')), 'PLYWOOD-FSF'), "
-        "  COALESCE(JSON_UNQUOTE(JSON_EXTRACT(data, '$.status')), ''), "
-        "  data "
-        "FROM neuron WHERE id = %d AND is_deleted = 0",
-        id);
-
-    if (mysql_query(m_mysql, query) != 0) return nullptr;
-
-    MYSQL_RES* result = mysql_store_result(m_mysql);
-    if (!result || mysql_num_rows(result) == 0) {
-        if (result) mysql_free_result(result);
-        return nullptr;
-    }
-
-    MYSQL_ROW row = mysql_fetch_row(result);
-    TrinityNeuron* neuron = new TrinityNeuron(parseNeuronRow(row));
-    mysql_free_result(result);
-    return neuron;
+TrinityNeuronPtr TrinityCore::loadNeuronById(int id) {
+    return loadNeuronWhere("id = ?", {}, { id });
 }
 
 // ============================================
-// ЗАГРУЗКА ДЕТЕЙ ЧЕРЕЗ SYNAPSE
+// Загрузка детей через synapse
 // ============================================
 std::vector<TrinitySynapse> TrinityCore::loadChildren(int parentId) {
     std::vector<TrinitySynapse> children;
     if (!m_connected) return children;
 
-    char query[512];
-    snprintf(query, sizeof(query),
+    const char* sql =
         "SELECT s.id, s.parent, s.child, "
-        "  JSON_UNQUOTE(JSON_EXTRACT(n.data, '$.code')), "
-        "  s.data "
+        "  COALESCE(JSON_UNQUOTE(JSON_EXTRACT(n.data, '$.code')), ''), "
+        "  COALESCE(CAST(s.data AS CHAR), '') "
         "FROM synapse s "
         "JOIN neuron n ON s.child = n.id "
-        "WHERE s.parent = %d AND n.is_deleted = 0 "
-        "ORDER BY s.id",
-        parentId);
+        "WHERE s.parent = ? AND n.is_deleted = 0 "
+        "ORDER BY s.id";
 
-    if (mysql_query(m_mysql, query) != 0) return children;
+    longlong pid = parentId;
+    MYSQL_BIND b{};
+    b.buffer_type = MYSQL_TYPE_LONGLONG;
+    b.buffer_value = &pid;
+    std::vector<MYSQL_BIND> params = { b };
 
-    MYSQL_RES* result = mysql_store_result(m_mysql);
-    if (!result) return children;
+    QueryResult res;
+    if (!runPrepared(sql, params, res)) return children;
 
     MYSQL_ROW row;
-    while ((row = mysql_fetch_row(result))) {
-        children.push_back(parseSynapseRow(row));
+    while ((row = mysql_fetch_row(res.result))) {
+        children.push_back(parseSynapseRow(
+            row[0] ? atoi(row[0]) : 0,
+            row[1] ? atoi(row[1]) : 0,
+            row[2] ? atoi(row[2]) : 0,
+            row[3] ? row[3] : "",
+            row[4] ? row[4] : ""));
     }
-
-    mysql_free_result(result);
     return children;
 }
 
 // ============================================
-// ЗАГРУЗКА PENDING-ПРОЕКТОВ
+// Загрузка pending-проектов
 // ============================================
 std::vector<TrinityNeuron> TrinityCore::loadPendingProjects() {
     std::vector<TrinityNeuron> projects;
     if (!m_connected) return projects;
 
-    const char* query =
+    const char* sql =
         "SELECT id, "
-        "  JSON_UNQUOTE(JSON_EXTRACT(data, '$.code')), "
+        "  COALESCE(JSON_UNQUOTE(JSON_EXTRACT(data, '$.code')), ''), "
         "  type, "
         "  COALESCE(JSON_UNQUOTE(JSON_EXTRACT(data, '$.category')), ''), "
         "  COALESCE(JSON_UNQUOTE(JSON_EXTRACT(data, '$.material')), ''), "
-        "  JSON_UNQUOTE(JSON_EXTRACT(data, '$.status')), "
-        "  data "
+        "  COALESCE(JSON_UNQUOTE(JSON_EXTRACT(data, '$.status')), ''), "
+        "  COALESCE(CAST(data AS CHAR), '') "
         "FROM neuron "
         "WHERE type = 'project' "
         "  AND JSON_UNQUOTE(JSON_EXTRACT(data, '$.status')) = 'pending' "
         "  AND is_deleted = 0 "
         "ORDER BY id";
 
-    if (mysql_query(m_mysql, query) != 0) return projects;
-
-    MYSQL_RES* result = mysql_store_result(m_mysql);
-    if (!result) return projects;
+    QueryResult res;
+    if (!runPrepared(sql, {}, res)) return projects;
 
     MYSQL_ROW row;
-    while ((row = mysql_fetch_row(result))) {
-        projects.push_back(parseNeuronRow(row));
+    while ((row = mysql_fetch_row(res.result))) {
+        projects.push_back(parseNeuronRow(
+            row[0] ? atoi(row[0]) : 0,
+            row[1] ? row[1] : "",
+            row[2] ? row[2] : "",
+            row[3] ? row[3] : "",
+            row[4] ? row[4] : "",
+            row[5] ? row[5] : "",
+            row[6] ? row[6] : ""));
     }
-
-    mysql_free_result(result);
     return projects;
 }
 
 // ============================================
-// ОТМЕТКА "DONE"
+// Отметка «done»
 // ============================================
 bool TrinityCore::markNeuronDone(int id) {
     if (!m_connected) return false;
 
-    char query[256];
-    snprintf(query, sizeof(query),
-        "UPDATE neuron SET data = JSON_SET(data, '$.status', 'done') WHERE id = %d", id);
+    const char* sql =
+        "UPDATE neuron SET data = JSON_SET(data, '$.status', 'done') WHERE id = ?";
 
-    return mysql_query(m_mysql, query) == 0;
+    longlong v = id;
+    MYSQL_BIND b{};
+    b.buffer_type = MYSQL_TYPE_LONGLONG;
+    b.buffer_value = &v;
+    std::vector<MYSQL_BIND> params = { b };
+
+    QueryResult res;
+    return runPrepared(sql, params, res);
 }
 
 // ============================================
-// ПАРСИНГ СТРОКИ НЕЙРОНА
+// Парсинг строки нейрона + геометрия из JSON/кода
 // ============================================
-TrinityNeuron TrinityCore::parseNeuronRow(MYSQL_ROW row) {
+TrinityNeuron TrinityCore::parseNeuronRow(int id, const std::string& code,
+                                          const std::string& type,
+                                          const std::string& category,
+                                          const std::string& material,
+                                          const std::string& status,
+                                          const std::string& data) {
     TrinityNeuron n;
-    n.id = row[0] ? atoi(row[0]) : 0;
-    n.code = row[1] ? row[1] : "";
-    n.type = row[2] ? row[2] : "";
-    n.category = row[3] ? row[3] : "";
-    n.material = row[4] ? row[4] : "PLYWOOD-FSF";
-    n.status = row[5] ? row[5] : "";
-    n.jsonData = row[6] ? row[6] : "";
-
-    // Парсим код: D.S.0.425.850.10
-    if (!n.code.empty()) {
-        sscanf_s(n.code.c_str(), "D.S.%d.%d.%d.%d",
-                 &n.processCode, &n.width, &n.height, &n.thickness);
-    }
-
+    n.id       = id;
+    n.code     = code;
+    n.type     = type;
+    n.category = category;
+    n.material = material.empty() ? "PLYWOOD-FSF" : material;
+    n.status   = status;
+    n.jsonData = data;
+    applyGeometry(n);
     return n;
 }
 
-// ============================================
-// ПАРСИНГ СТРОКИ СИНАПСА
-// ============================================
-TrinitySynapse TrinityCore::parseSynapseRow(MYSQL_ROW row) {
-    TrinitySynapse s;
-    s.id = row[0] ? atoi(row[0]) : 0;
-    s.parentId = row[1] ? atoi(row[1]) : 0;
-    s.childId = row[2] ? atoi(row[2]) : 0;
-    s.childCode = row[3] ? row[3] : "";
+void TrinityCore::applyGeometry(TrinityNeuron& n) {
+    // 1. Из JSON, если поля есть
+    TrinityJson::Value root = TrinityJson::parse(n.jsonData);
+    if (root.isObject()) {
+        const auto& w = root["width"];
+        const auto& h = root["height"];
+        const auto& t = root["thickness"];
+        const auto& p = root["process"];
+        if (!w.isNull()) n.width     = w.asInt(n.width);
+        if (!h.isNull()) n.height    = h.asInt(n.height);
+        if (!t.isNull()) n.thickness = t.asInt(n.thickness);
+        if (!p.isNull()) n.processCode = p.asInt(n.processCode);
+    }
 
-    if (row[4]) {
-        std::string json(row[4]);
-        s.position = parsePosition(json);
-        s.rotation = parseRotation(json);
-
-        // Статус
-        size_t statusPos = json.find("\"status\"");
-        if (statusPos != std::string::npos) {
-            size_t valStart = json.find('"', statusPos + 8);
-            size_t valEnd = json.find('"', valStart + 1);
-            if (valStart != std::string::npos && valEnd != std::string::npos) {
-                s.status = json.substr(valStart + 1, valEnd - valStart - 1);
-            }
+    // 2. Fallback: разбор кода D.<T>.<proc>.<W>.<H>.<Th> (например D.S.0.425.850.10)
+    if (n.width == 0 || n.height == 0) {
+        int proc = 0, w = 0, h = 0, th = 0;
+        char first = 0, second = 0;
+        if (sscanf(n.code.c_str(), "%c.%c.%d.%d.%d.%d",
+                   &first, &second, &proc, &w, &h, &th) == 6 && first == 'D') {
+            if (n.width == 0)     n.width = w;
+            if (n.height == 0)    n.height = h;
+            if (th > 0)           n.thickness = th;
+            if (n.processCode == 0) n.processCode = proc;
         }
     }
 
+    if (n.thickness <= 0) n.thickness = 10;
+}
+
+// ============================================
+// Парсинг строки синапса
+// ============================================
+TrinitySynapse TrinityCore::parseSynapseRow(int id, int parentId, int childId,
+                                            const std::string& childCode,
+                                            const std::string& data) {
+    TrinitySynapse s;
+    s.id        = id;
+    s.parentId  = parentId;
+    s.childId   = childId;
+    s.childCode = childCode;
+
+    TrinityJson::Value root = TrinityJson::parse(data);
+    if (root.isObject()) {
+        s.position = parsePosition(root);
+        s.rotation = parseRotation(root);
+        s.status   = root["status"].asString();
+    }
     return s;
 }
 
 // ============================================
-// ПАРСИНГ ПОЗИЦИИ [x, y, z]
+// Позиция: {"pos": [x, y, z]}
 // ============================================
-TrinityPosition TrinityCore::parsePosition(const std::string& json) {
+TrinityPosition TrinityCore::parsePosition(const TrinityJson::Value& data) {
     TrinityPosition pos;
-    size_t posKey = json.find("\"pos\"");
-    if (posKey != std::string::npos) {
-        size_t arrStart = json.find('[', posKey);
-        if (arrStart != std::string::npos) {
-            sscanf_s(json.c_str() + arrStart, "[%lf, %lf, %lf]", &pos.x, &pos.y, &pos.z);
-        }
+    const auto& arr = data["pos"];
+    if (arr.isArray() && arr.size() >= 3) {
+        pos.x = arr[0].asDouble();
+        pos.y = arr[1].asDouble();
+        pos.z = arr[2].asDouble();
     }
     return pos;
 }
 
 // ============================================
-// ПАРСИНГ ПОВОРОТА (одиночный или compound)
+// Поворот: {"rot": [x,y,z,a]} или {"rot": [[x,y,z,a],[x,y,z,a]]}
 // ============================================
-TrinityRotationCompound TrinityCore::parseRotation(const std::string& json) {
-    TrinityRotationCompound compound;
-
-    size_t rotKey = json.find("\"rot\"");
-    if (rotKey == std::string::npos) return compound;
-
-    size_t arrStart = json.find('[', rotKey);
-    if (arrStart == std::string::npos) return compound;
-
-    // Проверяем — массив массивов или один массив?
-    size_t nextChar = arrStart + 1;
-    while (nextChar < json.length() && json[nextChar] == ' ') nextChar++;
-
-    if (json[nextChar] == '[') {
-        // Compound: [[x,y,z,a],[x,y,z,a]]
-        size_t rot1Start = nextChar;
-        size_t rot1End = json.find(']', rot1Start);
-
-        if (rot1End != std::string::npos && compound.count < 2) {
-            sscanf_s(json.c_str() + rot1Start, "[%lf, %lf, %lf, %lf]",
-                     &compound.rotations[0].x, &compound.rotations[0].y,
-                     &compound.rotations[0].z, &compound.rotations[0].angle);
-            compound.count++;
-        }
-
-        size_t rot2Start = json.find('[', rot1End + 1);
-        if (rot2Start != std::string::npos && compound.count < 2) {
-            sscanf_s(json.c_str() + rot2Start, "[%lf, %lf, %lf, %lf]",
-                     &compound.rotations[1].x, &compound.rotations[1].y,
-                     &compound.rotations[1].z, &compound.rotations[1].angle);
-            compound.count++;
-        }
-    } else {
-        // Одиночный: [x,y,z,a]
-        sscanf_s(json.c_str() + arrStart, "[%lf, %lf, %lf, %lf]",
-                 &compound.rotations[0].x, &compound.rotations[0].y,
-                 &compound.rotations[0].z, &compound.rotations[0].angle);
-        compound.count = 1;
+static void fillOneRotation(const TrinityJson::Value& axisArr,
+                            TrinityRotation& r) {
+    if (axisArr.isArray() && axisArr.size() >= 4) {
+        r.x = axisArr[0].asDouble();
+        r.y = axisArr[1].asDouble();
+        r.z = axisArr[2].asDouble();
+        r.angle = axisArr[3].asDouble();
     }
+}
 
+TrinityRotationCompound TrinityCore::parseRotation(const TrinityJson::Value& data) {
+    TrinityRotationCompound compound;
+    const auto& rot = data["rot"];
+    if (!rot.isArray()) return compound;
+
+    if (rot.size() >= 1) {
+        if (rot[0].isArray()) {
+            // Compound: [[x,y,z,a], [x,y,z,a]]
+            for (size_t i = 0; i < rot.size() && compound.count < 2; ++i) {
+                TrinityRotation r;
+                fillOneRotation(rot[i], r);
+                compound.rotations[compound.count++] = r;
+            }
+        } else {
+            // Одиночный: [x,y,z,a]
+            fillOneRotation(rot, compound.rotations[0]);
+            compound.count = 1;
+        }
+    }
     return compound;
 }

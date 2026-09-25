@@ -1,11 +1,10 @@
 // TrinityCommands.h
 #pragma once
-#include "StdAfx.h"
-#include "TrinityBuildEngine.h"
 
-extern TrinityBuildEngine* g_engine;
-extern UINT_PTR g_timerId;
-
-void trinityStart();
-void trinityStop();
-void trinityProcess();
+// ============================================
+// Команды AutoCAD, регистрируемые в acrxEntry:
+//   TSTART — запуск таймера автосборки (5 сек)
+//   TSTOP  — остановка таймера
+// Реализация — в TrinityCommands.cpp.
+// ============================================
+void trinityRegisterCommands();
