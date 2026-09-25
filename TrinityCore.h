@@ -65,6 +65,20 @@ class TrinityCore {
     MYSQL* m_mysql = nullptr;
     bool m_connected = false;
 
+    // Повторное подключение с повторами (вызывается при обрыве соединения)
+    bool reconnect(int maxAttempts = 3, unsigned delayMs = 500);
+
+    // Проверка живости соединения (mysql_ping, не чаще раза в MIN_PING_INTERVAL_S)
+    // с автоматическим переподключением. Вызывается перед каждым запросом.
+    bool ensureConnected();
+
+    // Параметры последнего успешного подключения — используются для переподключения
+    std::string m_host, m_user, m_pass, m_db;
+
+    // Восстановление соединения после ошибки обрыва в середине запроса:
+    // переподключение + повторная отправка того же SQL. true — запрос выполнен успешно.
+    bool recoverQuery(const char* query);
+
 public:
     TrinityCore() = default;
     ~TrinityCore();
