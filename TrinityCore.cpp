@@ -37,16 +37,36 @@ void TrinityCore::disconnect() {
 }
 
 // ============================================
+// ЭКРАНИРОВАНИЕ SQL
+// Динамический буфер: mysql_real_escape_string гарантирует, что
+// экранированная строка не длиннее 2*len+1 байт, переполнение невозможно.
+// Экранирование учитывает кодировку соединения (utf8mb4), что защищает
+// от атак типа GBK-multi-byte.
+// ============================================
+std::string TrinityCore::escapeSqlLiteral(const std::string& value, bool emptyMeansNull) const {
+    if (value.empty() && emptyMeansNull) return "NULL";
+    if (!m_connected) return "'"; // соединение недоступно — вернём заведомо невалидный литерал
+
+    std::vector<char> buf(value.size() * 2 + 1);
+    unsigned long outLen = mysql_real_escape_string(
+        m_mysql, buf.data(), value.c_str(), (unsigned long)value.size());
+    buf.resize(outLen);
+
+    std::string result;
+    result.reserve(outLen + 2);
+    result += '\'';
+    result.append(buf.data(), buf.size());
+    result += '\'';
+    return result;
+}
+
+// ============================================
 // ЗАГРУЗКА НЕЙРОНА ПО КОДУ
 // ============================================
 TrinityNeuron* TrinityCore::loadNeuronByCode(const std::string& code) {
     if (!m_connected) return nullptr;
 
-    char escapedCode[256];
-    mysql_real_escape_string(m_mysql, escapedCode, code.c_str(), (unsigned long)code.length());
-
-    char query[512];
-    snprintf(query, sizeof(query),
+    const std::string query =
         "SELECT id, "
         "  JSON_UNQUOTE(JSON_EXTRACT(data, '$.code')), "
         "  type, "
@@ -55,12 +75,11 @@ TrinityNeuron* TrinityCore::loadNeuronByCode(const std::string& code) {
         "  COALESCE(JSON_UNQUOTE(JSON_EXTRACT(data, '$.status')), ''), "
         "  data "
         "FROM neuron "
-        "WHERE JSON_UNQUOTE(JSON_EXTRACT(data, '$.code')) = '%s' "
+        "WHERE JSON_UNQUOTE(JSON_EXTRACT(data, '$.code')) = " + escapeSqlLiteral(code) + " "
         "  AND is_deleted = 0 "
-        "LIMIT 1",
-        escapedCode);
+        "LIMIT 1";
 
-    if (mysql_query(m_mysql, query) != 0) return nullptr;
+    if (mysql_query(m_mysql, query.c_str()) != 0) return nullptr;
 
     MYSQL_RES* result = mysql_store_result(m_mysql);
     if (!result || mysql_num_rows(result) == 0) {
@@ -80,8 +99,7 @@ TrinityNeuron* TrinityCore::loadNeuronByCode(const std::string& code) {
 TrinityNeuron* TrinityCore::loadNeuronById(int id) {
     if (!m_connected) return nullptr;
 
-    char query[256];
-    snprintf(query, sizeof(query),
+    const std::string query =
         "SELECT id, "
         "  JSON_UNQUOTE(JSON_EXTRACT(data, '$.code')), "
         "  type, "
@@ -89,10 +107,9 @@ TrinityNeuron* TrinityCore::loadNeuronById(int id) {
         "  COALESCE(JSON_UNQUOTE(JSON_EXTRACT(data, '$.material')), 'PLYWOOD-FSF'), "
         "  COALESCE(JSON_UNQUOTE(JSON_EXTRACT(data, '$.status')), ''), "
         "  data "
-        "FROM neuron WHERE id = %d AND is_deleted = 0",
-        id);
+        "FROM neuron WHERE id = " + std::to_string(id) + " AND is_deleted = 0";
 
-    if (mysql_query(m_mysql, query) != 0) return nullptr;
+    if (mysql_query(m_mysql, query.c_str()) != 0) return nullptr;
 
     MYSQL_RES* result = mysql_store_result(m_mysql);
     if (!result || mysql_num_rows(result) == 0) {
@@ -113,18 +130,16 @@ std::vector<TrinitySynapse> TrinityCore::loadChildren(int parentId) {
     std::vector<TrinitySynapse> children;
     if (!m_connected) return children;
 
-    char query[512];
-    snprintf(query, sizeof(query),
+    const std::string query =
         "SELECT s.id, s.parent, s.child, "
         "  JSON_UNQUOTE(JSON_EXTRACT(n.data, '$.code')), "
         "  s.data "
         "FROM synapse s "
         "JOIN neuron n ON s.child = n.id "
-        "WHERE s.parent = %d AND n.is_deleted = 0 "
-        "ORDER BY s.id",
-        parentId);
+        "WHERE s.parent = " + std::to_string(parentId) + " AND n.is_deleted = 0 "
+        "ORDER BY s.id";
 
-    if (mysql_query(m_mysql, query) != 0) return children;
+    if (mysql_query(m_mysql, query.c_str()) != 0) return children;
 
     MYSQL_RES* result = mysql_store_result(m_mysql);
     if (!result) return children;
@@ -179,11 +194,11 @@ std::vector<TrinityNeuron> TrinityCore::loadPendingProjects() {
 bool TrinityCore::markNeuronDone(int id) {
     if (!m_connected) return false;
 
-    char query[256];
-    snprintf(query, sizeof(query),
-        "UPDATE neuron SET data = JSON_SET(data, '$.status', 'done') WHERE id = %d", id);
+    const std::string query =
+        "UPDATE neuron SET data = JSON_SET(data, '$.status', 'done') WHERE id = "
+        + std::to_string(id);
 
-    return mysql_query(m_mysql, query) == 0;
+    return mysql_query(m_mysql, query.c_str()) == 0;
 }
 
 // ============================================
