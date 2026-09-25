@@ -85,9 +85,14 @@ AcDbObjectId TrinityBuildEngine::ensureExists(const std::string& code,
         return AcDbObjectId::kNull;
     }
 
-    // 5. Сохраняем
-    m_files.saveDwg(cleanDb, filePath);
-    delete cleanDb;
+    // 5. Сохраняем. NB: saveDwg() закрывает базу через db->close() —
+    // именно закрытие удаляет lock-файлы *.dwl/*.dwl2 рядом с сохранённым DWG.
+    if (!m_files.saveDwg(cleanDb, filePath)) {
+        delete cleanDb;   // база осталась открытой после неудачного saveAs — освобождаем сами
+        return AcDbObjectId::kNull;
+    }
+    // Успешное saveDwg уже закрыло базу (db->close()) — delete НЕ вызываем,
+    // чтобы не закрыть повторно уже закрытую базу (eWasNotOpen / AV).
 
     // Пауза для файловой системы
     Sleep(200);
@@ -470,9 +475,13 @@ std::string TrinityBuildEngine::ensureFileExists(const std::string& code, int de
 
     if (!db) return "";
 
-    // Сохраняем
-    m_files.saveDwg(db, filePath);
-    delete db;
+    // Сохраняем. NB: saveDwg() теперь сама закрывает базу (db->close()) —
+    // именно закрытие удаляет lock-файлы *.dwl/*.dwl2 рядом с сохранённым DWG.
+    // Поэтому здесь НЕ вызываем delete db (повторное закрытие уже закрытой базы).
+    if (!m_files.saveDwg(db, filePath)) {
+        delete db;   // база осталась открытой после неудачного saveAs — освобождаем сами
+        return "";
+    }
     Sleep(200);
 
     return filePath;
@@ -537,14 +546,12 @@ void TrinityBuildEngine::deleteProjectFiles(const std::string& code) {
         subdir = m_files.projectsDir();
     }
 
-    std::string filePath = m_files.getFilePath(neuron.code, subdir);
-
-    // Удаляем файл, если он существует
+    // Удаляем файл и lock-файлы (*.dwl, *.dwl2), если они существуют.
+    // AutoCAD создаёт их при открытии/присоединении DWG (attachXref через
+    // readDwgFile) и не всегда убирает — иначе в details/assemblies остаётся мусор.
     if (m_files.fileExists(neuron.code, subdir)) {
-        wchar_t pathW[512];
-        MultiByteToWideChar(CP_UTF8, 0, filePath.c_str(), -1, pathW, 512);
-        _wunlink(pathW);
-        
+        m_files.deleteDwgWithLocks(neuron.code, subdir);
+
         wchar_t* wCode = utf2uni(neuron.code.c_str());
         acutPrintf(_T("\n[BuildEngine] Deleted file: %s.dwg\n"), wCode);
         free(wCode);

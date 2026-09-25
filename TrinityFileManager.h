@@ -13,6 +13,10 @@ public:
     bool fileExists(const std::string& code, const std::string& subdir) const;
     std::string getFilePath(const std::string& code, const std::string& subdir) const;
 
+    // Удаляет DWG-файл и связанные с ним lock-файлы AutoCAD (*.dwl, *.dwl2).
+    // Возвращает true, если удалён хотя бы основной файл (или его не было).
+    bool deleteDwgWithLocks(const std::string& code, const std::string& subdir) const;
+
     static AcDbDatabase* createEmptyDwg();
     static bool saveDwg(AcDbDatabase* db, const std::string& path);
 
