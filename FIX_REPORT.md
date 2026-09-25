@@ -196,3 +196,28 @@ g_timerId = 0;
 ## Проверка
 Код прошёл синтаксическую проверку `g++ -fsyntax-only -std=c++17 -Wall -Wextra`
 с заглушками mysql.h/ARX (полная сборка возможна только под MSVC + ObjectARX 2026 SDK).
+
+## 2026-09-25: Исправление компиляции — error C2065 `my_bool` (MySQL Connector/C 8.0)
+
+**Симптом:** MSVC: `error C2065: my_bool: необъявленный идентификатор` в местах установки
+`MYSQL_OPT_RECONNECT` (TrinityCore.cpp, строки ~69 и ~125).
+
+**Причина:** В MySQL Connector/C 8.0 (и новее 6.x) тип `my_bool` (typedef unsigned char)
+удалён из заголовков; `mysql_options()` для `MYSQL_OPT_RECONNECT` теперь ожидает указатель
+на стандартный `bool`. В коннекторах 5.x и в MariaDB Connector/C по-прежнему используется `my_bool`.
+
+**Исправление:** обе точки (connect() и reconnect()) защищены условной компиляцией:
+```cpp
+#if defined(MYSQL_VERSION_ID) && MYSQL_VERSION_ID >= 60000 || defined(MARIADB_BASE_VERSION) || defined(MARIADB_VERSION_ID)
+    my_bool reconnectFlag = 1;   // MySQL 5.x / MariaDB Connector/C
+#else
+    bool reconnectFlag = true;   // MySQL Connector/C 8.0+
+#endif
+mysql_options(m_mysql, MYSQL_OPT_RECONNECT, &reconnectFlag);
+```
+`MYSQL_VERSION_ID` определён в mysql.h (подключается через StdAfx.h), поэтому макрос доступен.
+Для MariaDB добавлена встречная проверка `MARIADB_BASE_VERSION`/`MARIADB_VERSION_ID`
+(там MYSQL_VERSION_ID может быть ≥ 80000, но API всё ещё принимает `my_bool`).
+
+**Проверка:** синтаксис + корректность выбора ветки препроцессора проверены с заглушкой
+mysql.h (MYSQL_VERSION_ID=80430 → ветка 8.0; без определения → ветка my_bool).

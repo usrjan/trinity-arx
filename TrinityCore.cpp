@@ -66,7 +66,13 @@ bool TrinityCore::connect(const char* host, const char* user,
 
     // Разрешаем клиенту самим пересылать запросы при потере соединения.
     // Это подстраховка: наш ensureConnected() делает явный пинг и переподключение.
+    // Тип аргумента: my_bool (typedef unsigned char) удалён из mysql.h в коннекторе 8.0,
+    // где mysql_options(...) для MYSQL_OPT_RECONNECT ожидает bool.
+#if defined(MYSQL_VERSION_ID) && MYSQL_VERSION_ID >= 60000 || defined(MARIADB_BASE_VERSION) || defined(MARIADB_VERSION_ID)
     my_bool reconnectFlag = 1;
+#else
+    bool reconnectFlag = true;
+#endif
     mysql_options(m_mysql, MYSQL_OPT_RECONNECT, &reconnectFlag);
 
     if (!mysql_real_connect(m_mysql, m_host.c_str(), m_user.c_str(),
@@ -122,7 +128,11 @@ bool TrinityCore::reconnect(int maxAttempts, unsigned delayMs) {
         mysql_options(m_mysql, MYSQL_OPT_READ_TIMEOUT, &timeout);
         timeout = MYSQL_WRITE_TIMEOUT_S;
         mysql_options(m_mysql, MYSQL_OPT_WRITE_TIMEOUT, &timeout);
+#if defined(MYSQL_VERSION_ID) && MYSQL_VERSION_ID >= 60000 || defined(MARIADB_BASE_VERSION) || defined(MARIADB_VERSION_ID)
         my_bool reconnectFlag = 1;
+#else
+        bool reconnectFlag = true;
+#endif
         mysql_options(m_mysql, MYSQL_OPT_RECONNECT, &reconnectFlag);
 
         if (mysql_real_connect(m_mysql, m_host.c_str(), m_user.c_str(),
