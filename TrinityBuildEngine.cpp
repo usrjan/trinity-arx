@@ -365,7 +365,9 @@ AcDbDatabase* TrinityBuildEngine::buildDetail(const TrinityNeuron& detail) {
     // Финальный отчёт
     /*
     wchar_t* wCode = utf2uni(detail.code.c_str());
-    acutPrintf(_T("\n[BuildEngine] Detail built: %s\n"), wCode);
+    // Фикс: %s для wchar_t* — неопределённое поведение (ANSI-printf читает
+    // wide-строку как char*, печатает мусор/краш). Только %ls.
+    acutPrintf(_T("\n[BuildEngine] Detail built: %ls\n"), wCode);
     free(wCode);
     */
 
@@ -397,7 +399,8 @@ AcDbDatabase* TrinityBuildEngine::buildDwg(const TrinityNeuron& neuron, int dept
 
     /*
     wchar_t* wCode = utf2uni(neuron.code.c_str());
-    acutPrintf(_T("\n[BuildEngine] Building %s: %d children (depth=%d)\n"),
+    // Фикс: wchar_t* аргумент требует %ls, а не %s
+    acutPrintf(_T("\n[BuildEngine] Building %ls: %d children (depth=%d)\n"),
         wCode, static_cast<int>(children.size()), depth);
     free(wCode);
     */
@@ -407,7 +410,8 @@ AcDbDatabase* TrinityBuildEngine::buildDwg(const TrinityNeuron& neuron, int dept
 
         /*
         wchar_t* wChild = utf2uni(syn.childCode.c_str());
-        acutPrintf(_T("\n[BuildEngine] Child: %s (depth=%d)\n"), wChild, depth);
+        // Фикс: wchar_t* аргумент требует %ls, а не %s
+        acutPrintf(_T("\n[BuildEngine] Child: %ls (depth=%d)\n"), wChild, depth);
         free(wChild);
         */
 
