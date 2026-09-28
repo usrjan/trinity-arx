@@ -23,6 +23,7 @@
 #include <acdocman.h>
 #include <adscodes.h>
 #include <acedads.h>
+#include <adscmd.h>   // acedCommandS / acedPostCommand (ObjectARX >= 2013)
 
 // ============================================
 // AutoCAD — База данных

@@ -612,7 +612,7 @@ int TrinityBuildEngine::drawAllRibs(AcDbDatabase* targetDb) {
             // Болты (маркеры) как у обычной планки
             AcDbObjectIdArray boltIds;
             TrinityGeometryBuilder::drawBoltMarkers(rib, pMs, boltIds);
-            for (size_t i = 0; i < boltIds.length(); i++) {
+            for (Adesk::Int32 i = 0; i < boltIds.length(); i++) {
                 AcDbEntity* pEnt = nullptr;
                 if (acdbOpenAcDbEntity(pEnt, boltIds[i], AcDb::kForWrite) == Acad::eOk && pEnt) {
                     AcGeMatrix3d bm;
