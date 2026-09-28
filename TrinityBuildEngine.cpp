@@ -128,9 +128,10 @@ AcDbDatabase* TrinityBuildEngine::buildDetail(const TrinityNeuron& detail) {
 
     // Назначаем слой
     std::string layer = TrinityLayerManager::layerName(detail.material);
-    wchar_t layerW[256];
-    MultiByteToWideChar(CP_UTF8, 0, layer.c_str(), -1, layerW, 256);
-    solid->setLayer(layerW);
+    // Фикс AV: точный размер вместо wchar_t[256] (при переполнении буфер
+    // оставался неинициализированным — setLayer читал мусор стека).
+    std::wstring layerW = utf8ToWide(layer);
+    if (!layerW.empty()) solid->setLayer(layerW.c_str());
 
     // Получаем Model Space
     AcDbBlockTable* pBt = nullptr;
@@ -341,14 +342,14 @@ AcDbDatabase* TrinityBuildEngine::buildDetail(const TrinityNeuron& detail) {
         return nullptr;
     }
 
-    wchar_t matLayerW[256];
-    MultiByteToWideChar(CP_UTF8, 0, layer.c_str(), -1, matLayerW, 256);
+    std::wstring matLayerW = utf8ToWide(layer);  // фикс AV: точный размер
 
     for (pIter->start(); !pIter->done(); pIter->step()) {
         AcDbEntity* pEnt = nullptr;
         if (pIter->getEntity(pEnt, AcDb::kForWrite) == Acad::eOk && pEnt) {
             if (pEnt->isKindOf(AcDb3dSolid::desc())) {
-                pEnt->setLayer(matLayerW);        // солид → материал
+                if (!matLayerW.empty())
+                    pEnt->setLayer(matLayerW.c_str());  // солид → материал
             } else if (pEnt->isKindOf(AcDbCircle::desc())) {
                 pEnt->setLayer(_T("_bolt"));       // кружочек → _bolt
             } else {
@@ -580,9 +581,10 @@ void TrinityBuildEngine::deleteProjectFiles(const std::string& code) {
 
     // Удаляем файл, если он существует
     if (m_files.fileExists(neuron.code, subdir)) {
-        wchar_t pathW[512];
-        MultiByteToWideChar(CP_UTF8, 0, filePath.c_str(), -1, pathW, 512);
-        _wunlink(pathW);
+        // Фикс AV: точный размер вместо wchar_t[512] — при переполнении
+        // буфер оставался неинициализированным и _wunlink читал мусор.
+        std::wstring pathW = utf8ToWide(filePath);
+        if (!pathW.empty()) _wunlink(pathW.c_str());
         
         wchar_t* wCode = utf2uni(neuron.code.c_str());
         acutPrintf(_T("\n[BuildEngine] Deleted file: %ls.dwg\n"), wCode);

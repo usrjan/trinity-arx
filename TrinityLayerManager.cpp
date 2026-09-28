@@ -26,16 +26,18 @@ int TrinityLayerManager::colorIndex(const std::string& materialCode) {
 AcDbObjectId TrinityLayerManager::createOrGetLayer(AcDbDatabase* db, const std::string& materialCode) {
     std::string name = layerName(materialCode);
 
-    wchar_t layerNameW[256];
-    MultiByteToWideChar(CP_UTF8, 0, name.c_str(), -1, layerNameW, 256);
+    // Фикс AV: точный размер вместо буфера wchar_t[256], который при
+    // переполнении оставался неинициализированным.
+    std::wstring layerNameW = utf8ToWide(name);
+    if (layerNameW.empty()) return AcDbObjectId::kNull;
 
     AcDbLayerTable* pLayerTable = nullptr;
     if (db->getSymbolTable(pLayerTable, AcDb::kForWrite) != Acad::eOk) return AcDbObjectId::kNull;
 
     AcDbObjectId layerId;
-    if (!pLayerTable->has(layerNameW)) {
+    if (!pLayerTable->has(layerNameW.c_str())) {
         AcDbLayerTableRecord* pRecord = new AcDbLayerTableRecord();
-        pRecord->setName(layerNameW);
+        pRecord->setName(layerNameW.c_str());
 
         AcCmColor color;
         color.setColorIndex(colorIndex(materialCode));
@@ -44,7 +46,7 @@ AcDbObjectId TrinityLayerManager::createOrGetLayer(AcDbDatabase* db, const std::
         pLayerTable->add(layerId, pRecord);
         pRecord->close();
     } else {
-        pLayerTable->getAt(layerNameW, layerId);
+        pLayerTable->getAt(layerNameW.c_str(), layerId);
     }
 
     pLayerTable->close();

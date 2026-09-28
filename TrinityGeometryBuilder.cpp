@@ -28,9 +28,10 @@ AcDb3dSolid* TrinityGeometryBuilder::buildBox(const TrinityNeuron& d) {
     solid->transformBy(mat);
 
     std::string layer = TrinityLayerManager::layerName(d.material);
-    wchar_t layerW[256];
-    MultiByteToWideChar(CP_UTF8, 0, layer.c_str(), -1, layerW, 256);
-    solid->setLayer(layerW);
+    // Фиксированный wchar_t[256] опасен: при переполнении MultiByteToWideChar
+    // не пишет ничего, и setLayer читает мусор со стека (Access Violation).
+    std::wstring layerW = utf8ToWide(layer);
+    if (!layerW.empty()) solid->setLayer(layerW.c_str());
 
     return solid;
 }

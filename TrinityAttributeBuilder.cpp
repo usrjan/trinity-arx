@@ -11,13 +11,15 @@ AcDbObjectId TrinityAttributeBuilder::addDetailCode(
 
     if (!pRecord || code.empty()) return AcDbObjectId::kNull;
 
-    wchar_t codeW[256];
-    MultiByteToWideChar(CP_UTF8, 0, code.c_str(), -1, codeW, 256);
+    // Фикс AV: точный размер вместо wchar_t[256], остававшегося
+    // неинициализированным при переполнении буфера.
+    std::wstring codeW = utf8ToWide(code);
+    if (codeW.empty()) return AcDbObjectId::kNull;
 
     AcDbAttributeDefinition* pAttdef = new AcDbAttributeDefinition();
 
     pAttdef->setPosition(AcGePoint3d::kOrigin);
-    pAttdef->setTextString(codeW);
+    pAttdef->setTextString(codeW.c_str());
     pAttdef->setTag(_T("DETAIL_CODE"));
     pAttdef->setPrompt(_T("Detail Code"));
     pAttdef->setHeight(30);

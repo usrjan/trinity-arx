@@ -77,3 +77,12 @@
 // ============================================
 void stringToWide(const std::string& str, wchar_t* out, size_t maxLen);
 wchar_t* utf2uni(const char* utf8_string);
+
+// ============================================
+// Безопасная конвертация UTF-8 std::string -> std::wstring
+// (реализация в StdAfx.cpp). Возвращает пустую строку при ошибке.
+// Использовать вместо фиксированных буферов wchar_t[N] +
+// MultiByteToWideChar: при переполнении буфера та функция не пишет
+// ничего, и последующее чтение незаписанного мусора = Access Violation.
+// ============================================
+std::wstring utf8ToWide(const std::string& s);
