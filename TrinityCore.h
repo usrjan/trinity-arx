@@ -27,6 +27,28 @@ struct TrinityRotationCompound {
 };
 
 // ============================================
+// ПАРАМЕТРЫ ПЛАНКИ (rib) — см. buildRib()
+// ============================================
+// Значения по умолчанию исторически зашиты в геометрии планки
+// (D.S.3.*). Теперь они вынесены в структуру и могут быть
+// переопределены свойствами нейрона в БД:
+//   "rib": { "height": 125, "slotHalf": 4, "slotDepth": 23.54316771,
+//            "holeOffset": 53 }
+// либо отдельными полями верхнего уровня: "rib_height", "rib_slot_half",
+// "rib_slot_depth", "rib_hole_offset".
+struct RibParams {
+    double height     = 125.0;          // высота планки (постоянная Y контура)
+    double slotHalf   = 4.0;            // половина ширины прорези под гнёздом
+    double slotDepth  = 23.54316771;    // глубина прямой части паза от кромки
+    double holeOffset = 53.0;           // расстояние до крайней точки дуги гнезда
+
+    bool isValid() const {
+        return height > 0 && slotHalf > 0 &&
+               slotDepth > slotHalf && holeOffset > slotDepth;
+    }
+};
+
+// ============================================
 // НЕЙРОН
 // ============================================
 struct TrinityNeuron {
@@ -37,10 +59,12 @@ struct TrinityNeuron {
     std::string material;      // PLYWOOD-FSF
     std::string status;        // pending, done, error
 
-    int width = 0;
-    int height = 0;
-    int thickness = 10;
+    double width = 0;          // из кода детали или свойства "width"
+    double height = 0;         // из кода детали или свойства "height"
+    double thickness = 10;     // из кода детали или свойства "thickness"
     int processCode = 0;       // 0=None, 2=Hole, 3=Socket
+
+    RibParams rib;             // параметры планки (для category == "rib")
 
     std::string jsonData;      // весь JSON нейрона
 };
@@ -84,6 +108,11 @@ public:
     // Проекты
     std::vector<TrinityNeuron> loadPendingProjects();
 
+    // Все детали указанного category (например "rib") — для команды TRIB.
+    // Свойства width/height/thickness при этом приходят из JSON нейрона,
+    // а не из кода (см. parseNeuronRow).
+    std::vector<TrinityNeuron> loadDetailsByCategory(const std::string& category);
+
     // Статусы
     bool markNeuronDone(int id);
 
@@ -97,4 +126,11 @@ public:
     static TrinitySynapse parseSynapseRow(MYSQL_ROW row);
     static TrinityPosition parsePosition(const std::string& json);
     static TrinityRotationCompound parseRotation(const std::string& json);
+
+    // Извлечение числового свойства из JSON-строки (без внешних JSON-библиотек).
+    // Ищет "key" и читает следующее за ним число. Возвращает false, если не найдено.
+    static bool jsonGetNumber(const std::string& json, const char* key, double& out);
+
+    // Извлечение строкового свойства из JSON-строки. Пустая строка = не найдено.
+    static std::string jsonString(const std::string& json, const char* key);
 };

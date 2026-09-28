@@ -27,6 +27,12 @@ private:
     // Геометрия → временная база → wblock → чистая база
     AcDbDatabase* buildDetail(const TrinityNeuron& detail);
 
+    // Отладочная постройка детали ПРЯМО в целевую базу (без wblock/DWG-кэша).
+    // Используется командой TRIB: солид + болты + атрибут DETAIL_CODE.
+    // offset — смещение всей геометрии после постройки.
+    bool buildDetailToDb(const TrinityNeuron& detail, AcDbDatabase* targetDb,
+                         const AcGePoint3d& offset = AcGePoint3d::kOrigin);
+
     // Обеспечить существование файла детали/конструкции
     // Без вставки XREF. Возвращает путь к файлу.
     // Используется в buildDwg для рекурсивной подготовки детей.
@@ -37,6 +43,8 @@ private:
 
 public:
     TrinityBuildEngine(const std::string& basePath) : m_files(basePath) {}
+
+    TrinityCore& core() { return m_core; }
 
     bool init(const char* host, const char* user, const char* pass, const char* db) {
         return m_core.connect(host, user, pass, db);

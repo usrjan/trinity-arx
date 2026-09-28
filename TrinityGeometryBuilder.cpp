@@ -44,67 +44,88 @@ AcDb3dSolid* TrinityGeometryBuilder::buildSidewall(const TrinityNeuron& d) {
 }
 
 // ============================================
-// ПЛАНКА (со гнёздами)
+// ПЛАНКА (со гнёздами) — динамическая деталь
 // ============================================
+// Все размеры управляются свойствами нейрона:
+//   W (длина) и T (толщина) — из TrinityNeuron (код D.S.3.<W>.<H>.<T>
+//     либо JSON-свойства width/height/thickness);
+//   H (высота сечения), slotHalf, slotDepth, holeOffset — из d.rib
+//     (см. RibParams в TrinityCore.h).
+// Контур строится параметрически; перед построением параметры проверяются
+// (RibParams::isValid()), чтобы не строить заведомо некорректную геометрию.
 AcDb3dSolid* TrinityGeometryBuilder::buildRib(const TrinityNeuron& d) {
     double W = d.width;
-    double H = 125.0;
+    double H = d.rib.height;      // раньше была константа 125.0 — теперь свойство
     double T = d.thickness;
     double centerY = H / 2.0;
 
-    const double SLOT_HALF = 4.0;
-    const double SLOT_DEPTH = 23.54316771;
-    const double HOLE_OFFSET = 53.0;
+    const double SLOT_HALF = d.rib.slotHalf;        // раньше 4.0
+    const double SLOT_DEPTH = d.rib.slotDepth;      // раньше 23.54316771
+    const double HOLE_OFFSET = d.rib.holeOffset;    // раньше 53.0
+
+    if (!d.rib.isValid() || W <= 2.0 * HOLE_OFFSET || T <= 0.0) {
+        acutPrintf(_T("\n[GeometryBuilder] Rib params invalid: W=%.1f H=%.1f T=%.1f slotHalf=%.2f slotDepth=%.2f holeOffset=%.1f\n"),
+                   W, H, T, SLOT_HALF, SLOT_DEPTH, HOLE_OFFSET);
+        return nullptr;
+    }
+
+    AcGePoint2d pt1Center, pt2Center;
+    double radius1 = 0, radius2 = 0;
+    double start1Angle = 0, end1Angle = 0, new1Start = 0;
+    double start2Angle = 0, end2Angle = 0, new2Start = 0;
+    AcGePoint2d pt11, pt12, pt21, pt22;
 
     // --------------------------------------------------
     // ЛЕВОЕ ОТВЕРСТИЕ (X=0, дуга поперёк прорези)
     // --------------------------------------------------
-    AcGePoint2d pt1Start(centerY - SLOT_HALF, W - SLOT_DEPTH);
-    AcGePoint2d pt1OnArc(centerY, W - HOLE_OFFSET);
-    AcGePoint2d pt1End(centerY + SLOT_HALF, W - SLOT_DEPTH);
+    {
+        AcGePoint2d pt1Start(centerY - SLOT_HALF, W - SLOT_DEPTH);
+        AcGePoint2d pt1OnArc(centerY, W - HOLE_OFFSET);
+        AcGePoint2d pt1End(centerY + SLOT_HALF, W - SLOT_DEPTH);
 
-    AcGeCircArc2d ge1Arc(pt1Start, pt1OnArc, pt1End);
-    AcGePoint2d pt1Center = ge1Arc.center();
-    double radius1 = ge1Arc.radius();
+        AcGeCircArc2d ge1Arc(pt1Start, pt1OnArc, pt1End);
+        pt1Center = ge1Arc.center();
+        radius1 = ge1Arc.radius();
 
-    AcGeVector2d vec1Start(pt1Start.x - pt1Center.x, pt1Start.y - pt1Center.y);
-    AcGeVector2d vec1End(pt1End.x - pt1Center.x, pt1End.y - pt1Center.y);
-    double start1Angle = vec1Start.angle();
-    double end1Angle = vec1End.angle();
+        AcGeVector2d vec1Start(pt1Start.x - pt1Center.x, pt1Start.y - pt1Center.y);
+        AcGeVector2d vec1End(pt1End.x - pt1Center.x, pt1End.y - pt1Center.y);
+        start1Angle = vec1Start.angle();
+        end1Angle = vec1End.angle();
 
-    AcGePoint2d pt11, pt12;
-    pt11.x = pt1Center.x + radius1 * cos(start1Angle);
-    pt11.y = pt1Center.y + radius1 * sin(start1Angle);
-    pt12.x = pt1Center.x + radius1 * cos(end1Angle);
-    pt12.y = pt1Center.y + radius1 * sin(end1Angle);
+        pt11.x = pt1Center.x + radius1 * cos(start1Angle);
+        pt11.y = pt1Center.y + radius1 * sin(start1Angle);
+        pt12.x = pt1Center.x + radius1 * cos(end1Angle);
+        pt12.y = pt1Center.y + radius1 * sin(end1Angle);
 
-    double new1Start = (start1Angle > end1Angle)
-        ? (start1Angle - 2.0 * M_PI) : start1Angle;
+        new1Start = (start1Angle > end1Angle)
+            ? (start1Angle - 2.0 * M_PI) : start1Angle;
+    }
 
     // --------------------------------------------------
     // ПРАВОЕ ОТВЕРСТИЕ (X=W)
     // --------------------------------------------------
-    AcGePoint2d pt2Start(centerY + SLOT_HALF, SLOT_DEPTH);
-    AcGePoint2d pt2OnArc(centerY, HOLE_OFFSET);
-    AcGePoint2d pt2End(centerY - SLOT_HALF, SLOT_DEPTH);
+    {
+        AcGePoint2d pt2Start(centerY + SLOT_HALF, SLOT_DEPTH);
+        AcGePoint2d pt2OnArc(centerY, HOLE_OFFSET);
+        AcGePoint2d pt2End(centerY - SLOT_HALF, SLOT_DEPTH);
 
-    AcGeCircArc2d ge2Arc(pt2Start, pt2OnArc, pt2End);
-    AcGePoint2d pt2Center = ge2Arc.center();
-    double radius2 = ge2Arc.radius();
+        AcGeCircArc2d ge2Arc(pt2Start, pt2OnArc, pt2End);
+        pt2Center = ge2Arc.center();
+        radius2 = ge2Arc.radius();
 
-    AcGeVector2d vec2Start(pt2Start.x - pt2Center.x, pt2Start.y - pt2Center.y);
-    AcGeVector2d vec2End(pt2End.x - pt2Center.x, pt2End.y - pt2Center.y);
-    double start2Angle = vec2Start.angle();
-    double end2Angle = vec2End.angle();
+        AcGeVector2d vec2Start(pt2Start.x - pt2Center.x, pt2Start.y - pt2Center.y);
+        AcGeVector2d vec2End(pt2End.x - pt2Center.x, pt2End.y - pt2Center.y);
+        start2Angle = vec2Start.angle();
+        end2Angle = vec2End.angle();
 
-    AcGePoint2d pt21, pt22;
-    pt21.x = pt2Center.x + radius2 * cos(start2Angle);
-    pt21.y = pt2Center.y + radius2 * sin(start2Angle);
-    pt22.x = pt2Center.x + radius2 * cos(end2Angle);
-    pt22.y = pt2Center.y + radius2 * sin(end2Angle);
+        pt21.x = pt2Center.x + radius2 * cos(start2Angle);
+        pt21.y = pt2Center.y + radius2 * sin(start2Angle);
+        pt22.x = pt2Center.x + radius2 * cos(end2Angle);
+        pt22.y = pt2Center.y + radius2 * sin(end2Angle);
 
-    double new2Start = (start2Angle > end2Angle)
-        ? (start2Angle - 2.0 * M_PI) : start2Angle;
+        new2Start = (start2Angle > end2Angle)
+            ? (start2Angle - 2.0 * M_PI) : start2Angle;
+    }
 
     // --------------------------------------------------
     // ПОЛИЛИНИЯ КОНТУРА (12 точек)
@@ -112,16 +133,16 @@ AcDb3dSolid* TrinityGeometryBuilder::buildRib(const TrinityNeuron& d) {
     AcDbPolyline* pPoly = new AcDbPolyline(12);
 
     pPoly->addVertexAt(0, AcGePoint2d(0.0, W), 0, 0, 0);
-    pPoly->addVertexAt(1, AcGePoint2d(centerY - 4.0, W), 0, 0, 0);
+    pPoly->addVertexAt(1, AcGePoint2d(centerY - SLOT_HALF, W), 0, 0, 0);
     pPoly->addVertexAt(2, pt11, tan((end1Angle - new1Start) / 4.0), 0, 0);
     pPoly->addVertexAt(3, pt12, 0, 0, 0);
-    pPoly->addVertexAt(4, AcGePoint2d(centerY + 4.0, W), 0, 0, 0);
+    pPoly->addVertexAt(4, AcGePoint2d(centerY + SLOT_HALF, W), 0, 0, 0);
     pPoly->addVertexAt(5, AcGePoint2d(H, W), 0, 0, 0);
     pPoly->addVertexAt(6, AcGePoint2d(H, 0.0), 0, 0, 0);
-    pPoly->addVertexAt(7, AcGePoint2d(centerY + 4.0, 0.0), 0, 0, 0);
+    pPoly->addVertexAt(7, AcGePoint2d(centerY + SLOT_HALF, 0.0), 0, 0, 0);
     pPoly->addVertexAt(8, pt21, tan((end2Angle - new2Start) / 4.0), 0, 0);
     pPoly->addVertexAt(9, pt22, 0, 0, 0);
-    pPoly->addVertexAt(10, AcGePoint2d(centerY - 4.0, 0.0), 0, 0, 0);
+    pPoly->addVertexAt(10, AcGePoint2d(centerY - SLOT_HALF, 0.0), 0, 0, 0);
     pPoly->addVertexAt(11, AcGePoint2d(0.0, 0.0), 0, 0, 0);
 
     if (!pPoly->isClosed()) pPoly->setClosed(true);
@@ -137,6 +158,8 @@ AcDb3dSolid* TrinityGeometryBuilder::buildRib(const TrinityNeuron& d) {
     AcGeVector3d v1(0.0, 0.0, 1.0);
     AcGeMatrix3d mat;
     mat.setToRotation(-(90.0 * (M_PI / 180.0)), v1, p1);
+    // Сдвиг по Y = H — берём из параметра планки, а не из d.height
+    // (для rib высота сечения живёт в rib.height).
     mat.setTranslation(AcGeVector3d(0, H, 0));
     pPoly->transformBy(mat);
 

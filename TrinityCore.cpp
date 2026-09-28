@@ -189,6 +189,41 @@ std::vector<TrinityNeuron> TrinityCore::loadPendingProjects() {
 }
 
 // ============================================
+// ЗАГРУЗКА ВСЕХ ДЕТАЛЕЙ ПО CATEGORY (TRIB)
+// ============================================
+std::vector<TrinityNeuron> TrinityCore::loadDetailsByCategory(const std::string& category) {
+    std::vector<TrinityNeuron> details;
+    if (!m_connected) return details;
+
+    const std::string query =
+        "SELECT id, "
+        "  JSON_UNQUOTE(JSON_EXTRACT(data, '$.code')), "
+        "  type, "
+        "  COALESCE(JSON_UNQUOTE(JSON_EXTRACT(data, '$.category')), ''), "
+        "  COALESCE(JSON_UNQUOTE(JSON_EXTRACT(data, '$.material')), 'PLYWOOD-FSF'), "
+        "  COALESCE(JSON_UNQUOTE(JSON_EXTRACT(data, '$.status')), ''), "
+        "  data "
+        "FROM neuron "
+        "WHERE type = 'detail' "
+        "  AND JSON_UNQUOTE(JSON_EXTRACT(data, '$.category')) = " + escapeSqlLiteral(category) + " "
+        "  AND is_deleted = 0 "
+        "ORDER BY COALESCE(JSON_EXTRACT(data, '$.sort'), 999999), id";
+
+    if (mysql_query(m_mysql, query.c_str()) != 0) return details;
+
+    MYSQL_RES* result = mysql_store_result(m_mysql);
+    if (!result) return details;
+
+    MYSQL_ROW row;
+    while ((row = mysql_fetch_row(result))) {
+        details.push_back(parseNeuronRow(row));
+    }
+
+    mysql_free_result(result);
+    return details;
+}
+
+// ============================================
 // ОТМЕТКА "DONE"
 // ============================================
 bool TrinityCore::markNeuronDone(int id) {
@@ -199,6 +234,63 @@ bool TrinityCore::markNeuronDone(int id) {
         + std::to_string(id);
 
     return mysql_query(m_mysql, query.c_str()) == 0;
+}
+
+// ============================================
+// МИНИ-ПАРСЕР JSON (без внешних библиотек)
+// ============================================
+// Найти начало значения по ключу верхнего уровня: "key" : <value>.
+// Реализация простая, но достаточная для плоских свойств нейрона.
+static size_t findJsonValue(const std::string& json, const char* key) {
+    std::string pat = std::string("\"") + key + "\"";
+    size_t p = json.find(pat);
+    while (p != std::string::npos) {
+        size_t colon = json.find(':', p + pat.size());
+        if (colon == std::string::npos) return std::string::npos;
+        // между именем ключа и «:» может быть только пробельная строка
+        bool ok = true;
+        for (size_t i = p + pat.size(); i < colon; i++) {
+            char c = json[i];
+            if (c != ' ' && c != '\t' && c != '\n' && c != '\r') { ok = false; break; }
+        }
+        if (ok) {
+            size_t v = colon + 1;
+            while (v < json.size() && (json[v] == ' ' || json[v] == '\t' ||
+                                        json[v] == '\n' || json[v] == '\r')) v++;
+            return v;
+        }
+        p = json.find(pat, p + pat.size());
+    }
+    return std::string::npos;
+}
+
+bool TrinityCore::jsonGetNumber(const std::string& json, const char* key, double& out) {
+    size_t v = findJsonValue(json, key);
+    if (v == std::string::npos) return false;
+    char* end = nullptr;
+    double d = strtod(json.c_str() + v, &end);
+    if (end == json.c_str() + v) return false;   // число не распознано
+    out = d;
+    return true;
+}
+
+std::string TrinityCore::jsonString(const std::string& json, const char* key) {
+    size_t v = findJsonValue(json, key);
+    if (v == std::string::npos || json[v] != '"') return "";
+    size_t end = json.find('"', v + 1);
+    if (end == std::string::npos) return "";
+    return json.substr(v + 1, end - v - 1);
+}
+
+// Прочитать числовое свойство из вложенного объекта: rib.slotDepth и т.п.
+static bool jsonGetNestedNumber(const std::string& json, const char* obj,
+                                const char* key, double& out) {
+    size_t v = findJsonValue(json, obj);
+    if (v == std::string::npos || json[v] != '{') return false;
+    size_t objEnd = json.find('}', v);
+    if (objEnd == std::string::npos) return false;
+    std::string nested = json.substr(v, objEnd - v + 1);
+    return TrinityCore::jsonGetNumber(nested, key, out);
 }
 
 // ============================================
@@ -214,11 +306,35 @@ TrinityNeuron TrinityCore::parseNeuronRow(MYSQL_ROW row) {
     n.status = row[5] ? row[5] : "";
     n.jsonData = row[6] ? row[6] : "";
 
-    // Парсим код: D.S.0.425.850.10
+    // 1. Значения по умолчанию — из кода детали: D.S.<proc>.<W>.<H>.<T>
     if (!n.code.empty()) {
-        sscanf_s(n.code.c_str(), "D.S.%d.%d.%d.%d",
-                 &n.processCode, &n.width, &n.height, &n.thickness);
+        int w = 0, h = 0, t = 0;
+        if (sscanf_s(n.code.c_str(), "D.S.%d.%d.%d.%d",
+                     &n.processCode, &w, &h, &t) == 4) {
+            n.width = w;
+            n.height = h;
+            n.thickness = t;
+        }
     }
+
+    // 2. Свойства нейрона переопределяют размеры из кода —
+    //    деталь становится динамической (управление через свойства в БД).
+    double v = 0;
+    if (jsonGetNumber(n.jsonData, "width", v))     n.width = v;
+    if (jsonGetNumber(n.jsonData, "height", v))    n.height = v;
+    if (jsonGetNumber(n.jsonData, "thickness", v)) n.thickness = v;
+
+    // 3. Параметры планки (rib): объект "rib": {height, slotHalf, slotDepth, holeOffset}
+    //    или плоские ключи "rib_height" и т.п.
+    if (jsonGetNestedNumber(n.jsonData, "rib", "height", v))      n.rib.height = v;
+    if (jsonGetNestedNumber(n.jsonData, "rib", "slotHalf", v))    n.rib.slotHalf = v;
+    if (jsonGetNestedNumber(n.jsonData, "rib", "slotDepth", v))   n.rib.slotDepth = v;
+    if (jsonGetNestedNumber(n.jsonData, "rib", "holeOffset", v))  n.rib.holeOffset = v;
+
+    if (jsonGetNumber(n.jsonData, "rib_height", v))      n.rib.height = v;
+    if (jsonGetNumber(n.jsonData, "rib_slot_half", v))   n.rib.slotHalf = v;
+    if (jsonGetNumber(n.jsonData, "rib_slot_depth", v))  n.rib.slotDepth = v;
+    if (jsonGetNumber(n.jsonData, "rib_hole_offset", v)) n.rib.holeOffset = v;
 
     return n;
 }

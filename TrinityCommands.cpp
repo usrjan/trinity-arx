@@ -121,3 +121,83 @@ void trinityProcess() {
         g_isProcessing = false;
     }
 }
+
+// ============================================
+// TRIB — нарисовать все планки (category='rib')
+// ============================================
+// Вспомогательная команда этапа разработки: берёт из базы все детали
+// с 'category' = 'rib' и рисует их геометрию прямо в текущем открытом
+// чертеже (Model Space активного документа), раскладывая слева направо
+// с зазором. Позволяет проверять динамические свойства планки
+// (width/height/thickness и rib.*) без полной пересборки DWG-кэша.
+void trinityRib() {
+    // Конфиг и подключение к БД — локальные, таймер не трогаем
+    TrinityDbConfig cfg;
+    if (!loadTrinityConfig(cfg)) {
+        acutPrintf(_T("\n[Trinity] TRIB: config load failed.\n"));
+        return;
+    }
+
+    TrinityCore core;
+    if (!core.connect(cfg.host.c_str(), cfg.user.c_str(),
+                      cfg.pass.c_str(), cfg.db.c_str())) {
+        acutPrintf(_T("\n[Trinity] TRIB: cannot connect to database.\n"));
+        return;
+    }
+
+    auto ribs = core.loadDetailsByCategory("rib");
+    if (ribs.empty()) {
+        acutPrintf(_T("\n[Trinity] TRIB: no details with category='rib' found.\n"));
+        return;
+    }
+
+    // Точка вставки первой планки (по умолчанию 0,0,0)
+    AcGePoint3d basePnt(0.0, 0.0, 0.0);
+    resbuf* promptRb = acedBuildResult(RTSTR, _T("\nInsertion point <0,0,0>: "));
+    int ret = acedGetPoint(nullptr, promptRb, asDblArray(basePnt));
+    acedRelResult(promptRb);
+    if (ret == RTCAN) return;   // Esc — выходим без изменений чертежа
+
+    // Шаг раскладки — по фактической длине каждой планки + зазор,
+    // чтобы детали не накладывались друг на друга.
+    const double GAP = 100.0;
+
+    // Движок нужен только ради buildDetailToDb (геометрия + слои + атрибуты).
+    // Файлы он создавать не будет, поэтому init() (подключение к БД) не вызываем —
+    // рёбра уже загружены локальным TrinityCore выше.
+    TrinityBuildEngine engine(cfg.basePath);
+
+    AcDbDatabase* db = acdbHostApplicationServices()->workingDatabase();
+
+    int drawn = 0, skipped = 0;
+    double cursorX = basePnt.x;
+
+    for (const auto& rib : ribs) {
+        wchar_t* wCode = utf2uni(rib.code.c_str());
+
+        // Печатаем фактические размеры — видно, как свойства влияют на деталь
+        acutPrintf(_T("\n[Trinity] TRIB: %s  W=%.1f H=%.1f T=%.1f (rib.height=%.1f slotHalf=%.2f slotDepth=%.2f holeOffset=%.1f)"),
+                   wCode, rib.width, rib.height, rib.thickness,
+                   rib.rib.height, rib.rib.slotHalf, rib.rib.slotDepth, rib.rib.holeOffset);
+        free(wCode);
+
+        AcGePoint3d offset(cursorX - basePnt.x, basePnt.y, basePnt.z);
+
+        if (!engine.buildDetailToDb(rib, db, offset)) {
+            acutPrintf(_T(" -> SKIPPED (invalid geometry params)\n"));
+            skipped++;
+            continue;
+        }
+
+        acutPrintf(_T(" -> OK\n"));
+        drawn++;
+        cursorX += rib.width + GAP;   // следующая планка правее текущей
+    }
+
+    if (drawn > 0) {
+        // ZOOM Extents, чтобы результат был виден
+        acedCommandS(RTSTR, _T("_.ZOOM"), RTSTR, _T("_E"), RTNONE);
+    }
+
+    acutPrintf(_T("\n[Trinity] TRIB done: drawn=%d, skipped=%d\n"), drawn, skipped);
+}

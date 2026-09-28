@@ -360,6 +360,95 @@ AcDbDatabase* TrinityBuildEngine::buildDetail(const TrinityNeuron& detail) {
 }
 
 // ============================================================
+// ОТЛАДОЧНАЯ ПОСТРОЙКА ДЕТАЛИ ПРЯМО В ЦЕЛЕВУЮ БАЗУ (TRIB)
+// ============================================================
+// Рисует солид детали (+ болты для планки и атрибут DETAIL_CODE)
+// непосредственно в Model Space переданной базы, без wblock и без
+// DWG-кэша. Назначение — быстрая проверка динамических свойств
+// детали на этапе разработки.
+// offset — смещение всей построенной геометрии (раскладка нескольких
+// деталей в ряд командой TRIB).
+// Вызывается с активного документа модальной командой (write-lock
+// гарантирован AutoCAD для ACRX_CMD_MODAL).
+// ============================================================
+bool TrinityBuildEngine::buildDetailToDb(const TrinityNeuron& detail,
+                                          AcDbDatabase* targetDb,
+                                          const AcGePoint3d& offset) {
+    if (!targetDb) return false;
+
+    // Слои в целевой базе
+    TrinityLayerManager::createOrGetLayer(targetDb, detail.material);
+    TrinityAttributeBuilder::ensureTagLayer(targetDb);
+    if (detail.category == "rib") {
+        TrinityLayerManager::ensureBoltLayer(targetDb);
+    }
+
+    AcDb3dSolid* solid = TrinityGeometryBuilder::build(detail);
+    if (!solid) return false;
+
+    std::string layer = TrinityLayerManager::layerName(detail.material);
+    wchar_t layerW[256];
+    MultiByteToWideChar(CP_UTF8, 0, layer.c_str(), -1, layerW, 256);
+    solid->setLayer(layerW);
+
+    AcDbBlockTable* pBt = nullptr;
+    if (targetDb->getSymbolTable(pBt, AcDb::kForRead) != Acad::eOk) {
+        delete solid;   // ещё не в базе
+        return false;
+    }
+
+    AcDbBlockTableRecord* pMs = nullptr;
+    Acad::ErrorStatus esMs = pBt->getAt(ACDB_MODEL_SPACE, pMs, AcDb::kForWrite);
+    pBt->close();
+
+    if (esMs != Acad::eOk || !pMs) {
+        if (pMs) pMs->close();
+        delete solid;
+        return false;
+    }
+
+    AcDbObjectIdArray ids;
+
+    AcDbObjectId solidId;
+    Acad::ErrorStatus esApp = pMs->appendAcDbEntity(solidId, solid);
+    if (esApp != Acad::eOk) {
+        pMs->close();
+        if (solidId.isValid()) solid->erase();
+        else delete solid;
+        return false;
+    }
+    ids.append(solidId);
+
+    // Болты — как у обычной сборки планки
+    if (detail.category == "rib") {
+        TrinityGeometryBuilder::drawBoltMarkers(detail, pMs, ids);
+    }
+
+    solid->close();
+
+    // Атрибут DETAIL_CODE (скрытый, слой _tag)
+    AcDbObjectId attrId = TrinityAttributeBuilder::addDetailCode(pMs, detail.code);
+    if (attrId != AcDbObjectId::kNull) ids.append(attrId);
+
+    pMs->close();
+
+    // Смещаем всё построенное к точке вставки команды
+    if (offset.x != 0.0 || offset.y != 0.0 || offset.z != 0.0) {
+        AcGeMatrix3d mat;
+        mat.setToTranslation(AcGeVector3d(offset.x, offset.y, offset.z));
+        for (int i = 0; i < ids.length(); i++) {
+            AcDbEntity* pEnt = nullptr;
+            if (acdbOpenObject(pEnt, ids[i], AcDb::kForWrite) == Acad::eOk && pEnt) {
+                pEnt->transformBy(mat);
+                pEnt->close();
+            }
+        }
+    }
+
+    return true;
+}
+
+// ============================================================
 // ПОСТРОЕНИЕ КОНСТРУКЦИИ/ПРОЕКТА
 // ============================================================
 // Логика:
