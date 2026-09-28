@@ -104,15 +104,26 @@ AcDbDatabase* TrinityFileManager::createEmptyDwg() {
 }
 
 bool TrinityFileManager::saveDwg(AcDbDatabase* db, const std::string& path) {
-    wchar_t pathW[512];
-    MultiByteToWideChar(CP_UTF8, 0, path.c_str(), -1, pathW, 512);
+    // ВАЖНО (фикс Access Violation): раньше путь писался в фиксированный
+    // буфер wchar_t[512]. MultiByteToWideChar при переполнении НЕ пишет
+    // ничего и оставляет буфер НЕЗАПИСАННЫМ (мусор стека), а db->saveAs()
+    // затем читал этот мусор как строку — чтение из невалидной памяти
+    // давало "Unhandled Access Violation Reading 0x..." внутри acad.exe.
+    // Теперь размер вычисляется точно, конвертация проверяется на успех.
+    if (!db) return false;
 
-    Acad::ErrorStatus es = db->saveAs(pathW);
+    std::wstring w = utf8ToWideLocal(path);
+    if (w.empty()) {
+        acutPrintf(_T("\n[FileManager] Bad path encoding: %hs\n"), path.c_str());
+        return false;
+    }
+
+    Acad::ErrorStatus es = db->saveAs(w.c_str());
     if (es == Acad::eOk) {
         //acutPrintf(_T("\n[FileManager] Saved: %ls\n"), pathW);
         return true;
     }
-    acutPrintf(_T("\n[FileManager] Save failed: %ls (error %d)\n"), pathW, es);
+    acutPrintf(_T("\n[FileManager] Save failed: %ls (error %d)\n"), w.c_str(), es);
     return false;
 }
 
@@ -123,12 +134,21 @@ AcDbObjectId TrinityFileManager::attachXref(
     const TrinityRotationCompound& rot,
     AcDbDatabase* targetDb)
 {
-    wchar_t pathW[512], nameW[256];
-    MultiByteToWideChar(CP_UTF8, 0, path.c_str(), -1, pathW, 512);
-    MultiByteToWideChar(CP_UTF8, 0, name.c_str(), -1, nameW, 256);
+    // ВАЖНО (фикс Access Violation): вместо фиксированных буферов
+    // wchar_t[512]/wchar_t[256] — точные std::wstring. При переполнении
+    // буфера MultiByteToWideChar не пишет ничего, и дальнейшее чтение
+    // незаписанного стекового мусора как строки давало AV внутри acad.exe.
+    if (!targetDb) return AcDbObjectId::kNull;
 
-    if (_waccess(pathW, 0) != 0) {
-        acutPrintf(_T("\n[FileManager] File not found: %ls\n"), pathW);
+    std::wstring pathW = utf8ToWideLocal(path);
+    std::wstring nameW = utf8ToWideLocal(name);
+    if (pathW.empty() || nameW.empty()) {
+        acutPrintf(_T("\n[FileManager] Bad path/name encoding: %hs\n"), path.c_str());
+        return AcDbObjectId::kNull;
+    }
+
+    if (_waccess(pathW.c_str(), 0) != 0) {
+        acutPrintf(_T("\n[FileManager] File not found: %ls\n"), pathW.c_str());
         return AcDbObjectId::kNull;
     }
 
@@ -139,10 +159,12 @@ AcDbObjectId TrinityFileManager::attachXref(
     AcDbBlockTable* pBlockTable = nullptr;
     Acad::ErrorStatus es = targetDb->getSymbolTable(pBlockTable, AcDb::kForRead);
     if (es == Acad::eOk) {
-        if (pBlockTable->has(nameW)) {
+        // has()/getAt() требуют const wchar_t* — раньше передавались
+        // неинициализированные при переполнении буферы, теперь .c_str().
+        if (pBlockTable->has(nameW.c_str())) {
             // Блок существует — проверяем, валиден ли его путь
             AcDbBlockTableRecord* pBlockRec = nullptr;
-            es = pBlockTable->getAt(nameW, pBlockRec, AcDb::kForRead);
+            es = pBlockTable->getAt(nameW.c_str(), pBlockRec, AcDb::kForRead);
             if (es == Acad::eOk && pBlockRec) {
                 // Если это XREF — проверяем, существует ли файл
                 if (pBlockRec->isFromExternalReference()) {
@@ -160,13 +182,9 @@ AcDbObjectId TrinityFileManager::attachXref(
                         pBlockRec->close();
                         pBlockTable->upgradeOpen();
                         
-                        // Удаляем старый блок из таблицы
-                        AcDbObjectId oldBlockId;
-                        pBlockTable->getAt(nameW, oldBlockId);
-                        
                         // Открываем для записи и удаляем
                         AcDbBlockTableRecord* pOldRec = nullptr;
-                        es = pBlockTable->getAt(nameW, pOldRec, AcDb::kForWrite);
+                        es = pBlockTable->getAt(nameW.c_str(), pOldRec, AcDb::kForWrite);
                         if (es == Acad::eOk && pOldRec) {
                             pOldRec->erase();
                             pOldRec->close();
@@ -178,13 +196,13 @@ AcDbObjectId TrinityFileManager::attachXref(
                         wasInserted = false;
                     } else {
                         pBlockRec->close();
-                        pBlockTable->getAt(nameW, blockId);
+                        pBlockTable->getAt(nameW.c_str(), blockId);
                         pBlockTable->close();
                         wasInserted = true;
                     }
                 } else {
                     pBlockRec->close();
-                    pBlockTable->getAt(nameW, blockId);
+                    pBlockTable->getAt(nameW.c_str(), blockId);
                     pBlockTable->close();
                     wasInserted = true;
                 }
@@ -200,24 +218,29 @@ AcDbObjectId TrinityFileManager::attachXref(
     // Шаг 2: Если блока нет — читаем файл и вставляем
     if (blockId == AcDbObjectId::kNull) {
         AcDbDatabase* pXrefDb = new AcDbDatabase(Adesk::kTrue, Adesk::kTrue);
-        es = pXrefDb->readDwgFile(pathW);
+        es = pXrefDb->readDwgFile(pathW.c_str());
 
         if (es == Acad::eOk) {
-            es = targetDb->insert(blockId, nameW, pXrefDb, true);
+            es = targetDb->insert(blockId, nameW.c_str(), pXrefDb, true);
             wasInserted = (es == Acad::eOk);
         }
-        delete pXrefDb;
+        delete pXrefDb;   // insert(...,true) клонирует базу-источник — удалять свою копию безопасно
 
         // Шаг 3: ОБРАБОТКА РЕЗУЛЬТАТА
         if (es == Acad::eDuplicateKey) {
-            // Блок уже есть (гонка или скрытый блок) — получаем его ID
+            // Блок уже есть (гонка или скрытый блок) — получаем его ID.
+            // ВАЖНО (фикс Access Violation): раньше результат
+            // getSymbolTable использовался без проверки — при ошибке
+            // pBt оставался nullptr и pBt->has(...) читал нулевой адрес.
             AcDbBlockTable* pBt = nullptr;
-            targetDb->getSymbolTable(pBt, AcDb::kForRead);
-            if (pBt->has(nameW)) {
-                pBt->getAt(nameW, blockId);
+            Acad::ErrorStatus esBt = targetDb->getSymbolTable(pBt, AcDb::kForRead);
+            if (esBt == Acad::eOk && pBt) {
+                if (pBt->has(nameW.c_str())) {
+                    pBt->getAt(nameW.c_str(), blockId);
+                }
+                pBt->close();
+                wasInserted = true;
             }
-            pBt->close();
-            wasInserted = true;
         }
         else if (es != Acad::eOk) {
             acutPrintf(_T("\n[FileManager] Insert failed (error %d)\n"), es);
@@ -226,7 +249,7 @@ AcDbObjectId TrinityFileManager::attachXref(
     }
 
     if (blockId == AcDbObjectId::kNull) {
-        acutPrintf(_T("\n[FileManager] Block not found: %ls\n"), nameW);
+        acutPrintf(_T("\n[FileManager] Block not found: %ls\n"), nameW.c_str());
         return AcDbObjectId::kNull;
     }
 
