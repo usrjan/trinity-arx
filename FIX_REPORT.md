@@ -174,23 +174,24 @@ g_timerId = 0;
 3. Обработчик `WM_TRINITY_TICK` (подклассирование окна) выполняется на главном
    потоке AutoCAD, где:
    - состояние lock mode определяется через системную переменную `LOCKMODE`
-     прямым getter'ом `acrtGetShortVariable()` (объявлён в acedads.h, есть во
-     всех поддерживаемых версиях ObjectARX). Буфер `resbuf` + `acedGetVar()`
-     не используются: именно они давали C2039 `"next": не является членом
-     "resbuf"` — при неполном (forward-declared) виде `resbuf` в единице
-     перевода ни `restype/resval`, ни `next` недоступны, а геттер не требует
-     обращения к полям вообще;
+     стандартным способом: `acedGetVar(_T("LOCKMODE"), &rb)` со стековым
+     `resbuf`, проверка `rb.restype == RTSHORT && rb.resval.rint != 0`. Поле
+     `next` при этом не используется вовсе (первоначальный C2039 `"next": не
+     является членом "resbuf"` был вызван обращением именно к `rb.next`).
+     Несуществующие в данном релизе SDK имена (`acrtGetShortVariable`) не
+     применяются — они давали C3861 «идентификатор не найден»;
    - если document lock mode включён (`LOCKMODE != 0`) — активный документ
      залочивается на запись RAII-обёрткой `TrinityDocLock`
      (`acDocManager->lockDocument()` / гарантированный `unlockDocument()`
      в деструкторе);
    - если lock mode выключен (`LOCKMODE == 0`, явный `lockDocument()` в этом
-     режиме возвращает ошибку) — тик пропускается, пока целевой документ
-     залочен на запись другим контекстом
-     (`AcApDocument::documentLockStatus() == AcAp::kWrite`). У `AcApDocument`
-     метода `isCommandActive()` в этом релизе SDK нет (он и вызывал второй
-     C2039), а `documentLockStatus()` возвращает тот же `AcAp::DocLockMode`,
-     что передаётся в `lockDocument()`;
+     режиме возвращает ошибку) — тик выполняется сразу, без лока: он приходит
+     в message pump главного потока AutoCAD (между сообщениями, вне команд),
+     а при LOCKMODE = 0 другой контекст (.NET/VBA/сторонняя ARX) параллельно
+     документу не работает. Опрос состояния документа не производится:
+     методов `AcApDocument::isCommandActive()` и
+     `AcApDocument::documentLockStatus()` в заголовках этого релиза SDK нет
+     (обе попытки давали C2039);
    - lock не получен (документ занят) — запись НЕ выполняется, ждём след. тик;
    - callback вызывается внутри SEH `__try/__except` — падение тика не уносит
      весь AutoCAD.
