@@ -158,7 +158,7 @@ AcDb3dSolid* TrinityGeometryBuilder::buildRib(const TrinityNeuron& d) {
         return nullptr;
     }
     AcDbRegion* pRegion = AcDbRegion::cast((AcRxObject*)regions[0]);
-    if (pRegion == NULL) {
+    if (pRegion == nullptr) {
         acutPrintf(_T("\n[GeometryBuilder] region cast failed\n"));
         for (int i = 0; i < lines.length(); i++) delete (AcRxObject*)lines[i];
         for (int i = 0; i < regions.length(); i++) delete (AcRxObject*)regions[i];
@@ -208,7 +208,7 @@ AcDb3dSolid* TrinityGeometryBuilder::extrudeProfile(const AcGePoint3dArray& pts,
         return nullptr;
     }
     AcDbRegion* pRegion = AcDbRegion::cast((AcRxObject*)regions[0]);
-    if (pRegion == NULL) {
+    if (pRegion == nullptr) {
         for (int i = 0; i < lines.length(); i++) delete (AcRxObject*)lines[i];
         for (int i = 0; i < regions.length(); i++) delete (AcRxObject*)regions[i];
         delete pPoly;

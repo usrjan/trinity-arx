@@ -29,10 +29,10 @@ AcDbObjectId TrinityAttributeBuilder::addDetailCode(
     pAttdef->setVerticalMode(AcDb::kTextTop);
     pAttdef->setWidthFactor(0.75);
     pAttdef->setFieldLength(50);
-    pAttdef->setInvisible(Adesk::kTrue);
-    pAttdef->setConstant(Adesk::kTrue);
-    pAttdef->setVerifiable(Adesk::kFalse);
-    pAttdef->setPreset(Adesk::kFalse);
+    pAttdef->setInvisible(true);
+    pAttdef->setConstant(true);
+    pAttdef->setVerifiable(false);
+    pAttdef->setPreset(false);
 
     pAttdef->setLayer(_T("_tag"));
 

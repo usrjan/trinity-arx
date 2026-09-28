@@ -75,6 +75,9 @@
 // ============================================
 // Объявления утилит (реализация в StdAfx.cpp)
 // ============================================
+// НЕ ИСПОЛЬЗОВАТЬ: небезопасна (незаписанный мусор при переполнении буфера).
+// Применяйте utf8ToWide() ниже. Оставлена для совместимости со старым кодом.
+[[deprecated("use utf8ToWide(): fixed-size buffer conversion is unsafe")]]
 void stringToWide(const std::string& str, wchar_t* out, size_t maxLen);
 wchar_t* utf2uni(const char* utf8_string);
 
