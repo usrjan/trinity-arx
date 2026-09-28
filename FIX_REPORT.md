@@ -180,8 +180,8 @@ g_timerId = 0;
      (`acDocManager->lockDocument()` / гарантированный `unlockDocument()`
      в деструкторе);
    - если lock mode выключен (`LOCKMODE == 0`, явный `lockDocument()` в этом
-     режиме возвращает ошибку) — тик пропускается, если документ не в
-     состоянии `AcAp::kDocIdle` (`acDocManager->documentState()`);
+     режиме возвращает ошибку) — тик пропускается, пока в активном документе
+     выполняется команда (`AcApDocument::isCommandActive()`);
    - lock не получен (документ занят) — запись НЕ выполняется, ждём след. тик;
    - callback вызывается внутри SEH `__try/__except` — падение тика не уносит
      весь AutoCAD.

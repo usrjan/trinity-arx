@@ -87,31 +87,49 @@ void trnDispatchTick()
 {
     if (!g_trnCallback) return;
 
-    // Проверяем, включён ли в AutoCAD document lock mode (системная
-    // переменная LOCKMODE <> 0). Если включён — сам механизм локов
-    // обеспечивает корректную сериализацию доступа к документу.
+    // Активный документ. Именно его мы и собираемся залочить/использовать.
     AcApDocument* pDoc = acDocManager->curDocument();
     if (!pDoc) return;
 
-    resbuf* rb = acedGetVar(L"LOCKMODE", NULL);
-    const bool lockModeEnabled = (rb != NULL &&
-                                  rb->restype == RTSHORT &&
-                                  rb->resval.rint != 0);
-    if (rb) acutRelRb(rb);
+    // Проверка document lock mode. В данном релизе ObjectARX (см.
+    // acdocman.h / AcApDocLockMode.h) у AcApDocManager нет метода
+    // isLockModeEnabled(), а вложенного типа AcApDocument::DocumentStatus
+    // и констант eIsIdle/kDocIdle не существует — на эти несуществующие
+    // имена и указывали ошибки C2039/C2065.
+    //
+    // Единственный легальный способ узнать режим: системная переменная
+    // LOCKMODE (INT16). Читаем её буфером resbuf, который выделяет сам
+    // вызывающий код: acedGetVar(const ACHAR* symName, resbuf* result)
+    // возвращает Acad::eOk и заполняет переданный буфер. Освобождать его
+    // acutRelRb() НЕ нужно — именно попытка трактовать возврат как
+    // «resbuf*, выделенный внутри» и присвоить int указателю давала C2440.
+    bool lockModeEnabled = false;
+    {
+        resbuf rbLock{};
+        rbLock.restype = RTSHORT;
+        rbLock.resval.rint = 0;
+        rbLock.next = nullptr;
+        if (acedGetVar(_T("LOCKMODE"), &rbLock) == Acad::eOk &&
+            rbLock.resval.rint != 0) {
+            lockModeEnabled = true;
+        }
+    }
 
     if (!lockModeEnabled) {
-        // Lock mode ОТКЛЮЧЁН (LOCKMODE = 0): писать в документ можно
-        // только когда он полностью простаивает. Единственный легальный
-        // статус для начала работы — kDocIdle (документ не выполняет
-        // команду, не регенерируется, не разрушается). При любом другом
-        // состоянии пропускаем тик и ждём следующий.
-        if (acDocManager->documentState(pDoc) != AcAp::kDocIdle) {
+        // Lock mode ОТКЛЮЧЁН (LOCKMODE = 0): явный lockDocument() в этом
+        // режиме вернёт Acad::eLockModeOff, поэтому писать в документ можно
+        // только когда он простаивает. Публичного API состояния документа
+        // в данном релизе заголовков нет — доступная и достаточная
+        // проверка: прямо сейчас в текущем документе не выполняется
+        // редакторская команда. Если команда активна — пропускаем тик
+        // и ждём следующий.
+        if (pDoc->isCommandActive()) {
             return;
         }
-        // В этом режиме явный lockDocument() недопустим (Acad::eLockModeOff),
-        // но доступ к документу уже сериализован: наш тик обработан на
-        // главном потоке AutoCAD из очереди его сообщений, значит другой
-        // контекст сейчас не активен. Работаем без лока.
+        // Доступ к документу сериализован: наш тик обработан на главном
+        // потоке AutoCAD из очереди его сообщений, значит другой контекст
+        // (.NET/VBA/сторонняя ARX) сейчас не активен. Работаем без лока —
+        // именно так ведут себя все «родные» ARX-команды при LOCKMODE=0.
         trnRunCallback();
         return;
     }
