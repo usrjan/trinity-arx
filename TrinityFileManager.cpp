@@ -323,12 +323,12 @@ AcDbObjectId TrinityFileManager::attachXref(
         return AcDbObjectId::kNull;
     }
 
-    // Шаг 4: Регистрация блока достаточна для внешней базы; BlockReference
-    // создаём только в рабочей (current) базе.
-    if (!targetDb->isCurrent()) {
-        return blockId;   // блок уже вставлен в таблицу блоков targetDb
-    }
-
+    // Шаг 4: Создаём BlockReference в Model Space целевой базы.
+    // У AcDbDatabase НЕТ метода isCurrent() — раньше эта проверка вызывала
+    // C2039. Модель работы здесь корректна и для временной базы (tempDb в
+    // buildDwg), и для активного документа (insertProjectToTarget):
+    // getSymbolTable()/appendAcDbEntity работают с любой открытой базой,
+    // а wblock позже вытаскивает только добавленные объекты.
     AcDbBlockTable* pBt = nullptr;
     es = targetDb->getSymbolTable(pBt, AcDb::kForRead);
     if (es != Acad::eOk) {
