@@ -279,8 +279,19 @@ AcDbDatabase* TrinityBuildEngine::buildDetail(const TrinityNeuron& detail) {
     Acad::ErrorStatus es = tempDb->wblock(cleanDb, ids, AcGePoint3d::kOrigin);
     delete tempDb;
 
-    if (es != Acad::eOk || !cleanDb) {
-        delete cleanDb;
+    if (es != Acad::eOk) {
+        // При ошибке wblock не гарантирует корректного состояния выходного
+        // указателя: он может остаться nullptr, а может указывать на
+        // частично сконструированную базу. Удаление такого объекта приводит
+        // к двойному free() / Access Violation — просто обнуляем указатель
+        // и возвращаем ошибку. Если база всё же валидна (es == eOk, но
+        // cleanDb == nullptr — формально невозможно, но защищаемся), её
+        // тоже нельзя удалять вслепую.
+        acutPrintf(_T("\n[BuildEngine] wblock failed: %d\n"), (int)es);
+        cleanDb = nullptr;
+        return nullptr;
+    }
+    if (!cleanDb) {
         return nullptr;
     }
 
@@ -434,8 +445,14 @@ AcDbDatabase* TrinityBuildEngine::buildDwg(const TrinityNeuron& neuron, int dept
     Acad::ErrorStatus es = tempDb->wblock(cleanDb, ids, AcGePoint3d::kOrigin);
     delete tempDb;
 
-    if (es != Acad::eOk || !cleanDb) {
-        delete cleanDb;
+    if (es != Acad::eOk) {
+        // Не удаляем cleanDb вслепую: при ошибке wblock выходной указатель
+        // может быть в неопределённом состоянии (частично сконструированная
+        // база) — delete приведёт к двойному free() / Access Violation.
+        acutPrintf(_T("\n[BuildEngine] buildDwg wblock failed: %d\n"), (int)es);
+        return nullptr;
+    }
+    if (!cleanDb) {
         return nullptr;
     }
 
