@@ -67,9 +67,12 @@ AcDb3dSolid* TrinityGeometryBuilder::buildRib(const TrinityNeuron& d) {
     const double HOLE_OFFSET = d.ribHoleOffset;
 
     // sanity-проверка параметров: иначе контур самопересечётся
+    // ВНИМАНИЕ: здесь координаты полилинии имеют вид (x=centerY±..., y=0..W),
+    // т.е. «вдоль» планки — это вторая координата (W), а «поперёк» — H.
+    // Поэтому ограничение на SLOT_HALF относится к W, а не к H.
     if (W <= 0 || H <= 0 || T <= 0 ||
         HOLE_OFFSET * 2.0 >= W || SLOT_DEPTH < HOLE_OFFSET ||
-        SLOT_HALF * 2.0 >= H) {
+        SLOT_HALF * 2.0 >= W) {
         acutPrintf(_T("\n[GeometryBuilder] buildRib: invalid params W=%.1f H=%.1f T=%.1f slotHalf=%.1f slotDepth=%.1f holeOffset=%.1f\n"),
                    W, H, T, SLOT_HALF, SLOT_DEPTH, HOLE_OFFSET);
         return nullptr;

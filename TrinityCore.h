@@ -47,12 +47,16 @@ struct TrinityNeuron {
     //     быть переопределены полями верхнего уровня в JSON нейрона (data):
     //     "width", "height", "thickness"
     //     Тонкая настройка гнёзд — секцией "rib":
-    //     "rib": { "height": 125, "slotHalf": 4, "slotDepth": 23.54316771,
+    //     "rib": { "height": 125, "slotHalf": 4, "slotDepth": 54,
     //              "holeOffset": 53 }
     double ribHeight   = 0;            // 0 = использовать height нейрона
     double ribSlotHalf = 4.0;          // полуширина гнёзд (прорезей)
-    double ribSlotDepth = 23.54316771;   // глубина прямого участка паза
-    double ribHoleOffset = 53.0;         // отступ дуги гнезда от края
+    // Глубина прямого участка паза по умолчанию = holeOffset + 1 мм:
+    // дуга гнезда проходит через точку на расстоянии holeOffset от края,
+    // поэтому прямой участок обязан быть чуть больше, иначе контур
+    // самопересекается (см. sanity-проверку в buildRib).
+    double ribSlotDepth = 54.0;        // глубина прямого участка паза
+    double ribHoleOffset = 53.0;       // отступ дуги гнезда от края
 
     std::string jsonData;      // весь JSON нейрона
 };

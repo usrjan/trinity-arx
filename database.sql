@@ -522,16 +522,15 @@ INSERT INTO neuron (pid, type, data) VALUES (
 );
 
 -- ============================================
-// ============================================
-// ПЛАНКИ (D.S.3) — динамические детали
-// ============================================
-// Габариты по умолчанию берутся из кода: D.S.3.<width>.<height>.<thickness>.
-// Любое свойство можно переопределить полями в JSON нейрона:
-//   "width", "height", "thickness" — габариты;
-//   "rib": { "height", "slotHalf", "slotDepth", "holeOffset" } — геометрия гнёзд.
-// Пример: планка 600×150×12 с более широкими гнёздами:
-//   JSON_OBJECT('code','D.S.3.600.150.12','category','rib', ... ,
-//               'rib', JSON_OBJECT('slotHalf', 5, 'slotDepth', 25, 'holeOffset', 55))
+-- ПЛАНКИ (D.S.3) — динамические детали
+-- ============================================
+-- Габариты по умолчанию берутся из кода: D.S.3.<width>.<height>.<thickness>.
+-- Любое свойство можно переопределить полями в JSON нейрона:
+--   "width", "height", "thickness" — габариты;
+--   "rib": { "height", "slotHalf", "slotDepth", "holeOffset" } — геометрия гнёзд.
+-- Пример: планка 600×150×12 с более широкими гнёздами:
+--   JSON_OBJECT('code','D.S.3.600.150.12','category','rib', ... ,
+--               'rib', JSON_OBJECT('slotHalf', 5, 'slotDepth', 56, 'holeOffset', 55))
 INSERT INTO neuron (pid, type, data) VALUES
 (@ribs_id, 'detail', JSON_OBJECT('code', 'D.S.3.425.125.10', 'category', 'rib', 'material', 'PLYWOOD-FSF', 'sort', 301)),
 (@ribs_id, 'detail', JSON_OBJECT('code', 'D.S.3.850.125.10', 'category', 'rib', 'material', 'PLYWOOD-FSF', 'sort', 302));
