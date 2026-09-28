@@ -7,12 +7,13 @@
 #include <io.h>
 
 // ============================================================
-// ПРИМЕЧАНИЕ: метод ensureExists удалён как мёртвый код.
-// Он не вызывался ни из одного пути сборки (processAllProjects ->
-// ensureFileExists строит файлы без вставки XREF; buildDwg использует
-// ensureFileExists + attachXref во временную базу). Вместо него параметр
-// targetDb теперь реально используется: processAllProjects вставляет
-// готовый DWG проекта в активный документ через insertProjectToTarget.
+// ПРИМЕЧАНИЕ: вставка готового DWG проекта в текущий чертёж НЕ делается.
+// Метод ensureExists был удалён как мёртвый код, реализованная вместо
+// него insertProjectToTarget вызывала ошибку 320 (eWasOpenForWrite) при
+// работе с активным документом и была убрана по решению заказчика:
+// достаточно того, что процесс сборки создаёт файл проекта на диске.
+// Единственный потребитель attachXref — buildDwg (вставка детей как
+// XREF во ВРЕМЕННУЮ базу с последующим wblock).
 // ============================================================
 
 // ============================================================
@@ -433,28 +434,15 @@ std::string TrinityBuildEngine::ensureFileExists(const std::string& code, int de
 }
 
 // ============================================================
-// ВСТАВКА ГОТОВОГО ПРОЕКТА В ЦЕЛЕВУЮ БАЗУ (активный документ)
-// ============================================================
-// Реализация назначения параметра targetDb после удаления мёртвого
-// ensureExists: вся работа выполняется в attachXref — регистрация
-// XREF-блока в таблице блоков targetDb и (для рабочей базы) создание
-// BlockReference в Model Space. Позиция — начало координат, поворот —
-// отсутствие.
-// ============================================================
-AcDbObjectId TrinityBuildEngine::insertProjectToTarget(const std::string& filePathUtf8,
-                                                       const std::string& neuronCode,
-                                                       AcDbDatabase* targetDb) {
-    if (!targetDb || filePathUtf8.empty()) return AcDbObjectId::kNull;
-
-    TrinityRotationCompound noRotation;   // count = 0 => без поворота
-    return m_files.attachXref(
-        filePathUtf8, neuronCode, AcGePoint3d::kOrigin, noRotation, targetDb);
-}
-
-// ============================================================
 // ОБРАБОТКА ВСЕХ PENDING-ПРОЕКТОВ
 // ============================================================
-int TrinityBuildEngine::processAllProjects(AcDbDatabase* targetDb) {
+// Результат работы — файлы DWG на диске (проекты, конструкции, детали).
+// Вставка проекта в текущий чертёж сознательно НЕ выполняется: пользователю
+// достаточно созданного файла проекта (см. примечание в начале файла).
+// Параметр targetDb сохранён в сигнатуре для совместимости с вызывающим
+// кодом (trinityProcess), но внутри не используется.
+// ============================================================
+int TrinityBuildEngine::processAllProjects(AcDbDatabase* /*targetDb*/) {
     auto projects = m_core.loadPendingProjects();
     if (projects.empty()) return 0;
 
@@ -469,9 +457,9 @@ int TrinityBuildEngine::processAllProjects(AcDbDatabase* targetDb) {
         deleteProjectFiles(proj.code);
 
         // Создаём файл проекта (рекурсивно)
-        std::string actualPath = ensureFileExists(proj.code, 0);
+        std::string projectFilePath = ensureFileExists(proj.code, 0);
 
-        if (actualPath.empty()) {
+        if (projectFilePath.empty()) {
             wchar_t* wCode = utf2uni(proj.code.c_str());
             acutPrintf(_T("\n[BuildEngine] Failed to create project: %ls\n"), wCode);
             free(wCode);
@@ -480,18 +468,6 @@ int TrinityBuildEngine::processAllProjects(AcDbDatabase* targetDb) {
 
         // Отмечаем done — файл создан
         m_core.markNeuronDone(proj.id);
-
-        // Вставляем готовый DWG проекта как XREF в целевую базу
-        // (активный документ AutoCAD). Раньше targetDb в движке не
-        // использовался нигде — теперь у него есть реальное назначение.
-        if (targetDb) {
-            AcDbObjectId refId = insertProjectToTarget(actualPath, proj.code, targetDb);
-            if (refId == AcDbObjectId::kNull) {
-                wchar_t* wCodeIns = utf2uni(proj.code.c_str());
-                acutPrintf(_T("\n[BuildEngine] Insert to drawing failed: %ls\n"), wCodeIns);
-                free(wCodeIns);
-            }
-        }
 
         wchar_t* wCode = utf2uni(proj.code.c_str());
         acutPrintf(_T("\n[BuildEngine] Project done: %ls\n"), wCode);

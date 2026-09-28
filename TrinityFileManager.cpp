@@ -325,10 +325,11 @@ AcDbObjectId TrinityFileManager::attachXref(
 
     // Шаг 4: Создаём BlockReference в Model Space целевой базы.
     // У AcDbDatabase НЕТ метода isCurrent() — раньше эта проверка вызывала
-    // C2039. Модель работы здесь корректна и для временной базы (tempDb в
-    // buildDwg), и для активного документа (insertProjectToTarget):
-    // getSymbolTable()/appendAcDbEntity работают с любой открытой базой,
-    // а wblock позже вытаскивает только добавленные объекты.
+    // C2039. Целевая база здесь — всегда временная база из buildDwg
+    // (вставка готового проекта в активный документ не выполняется —
+    // см. примечание в начале TrinityBuildEngine.cpp), поэтому создание
+    // BlockReference безопасно: wblock позже вытаскивает только
+    // добавленные объекты.
     AcDbBlockTable* pBt = nullptr;
     es = targetDb->getSymbolTable(pBt, AcDb::kForRead);
     if (es != Acad::eOk) {
