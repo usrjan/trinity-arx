@@ -80,6 +80,57 @@ std::string TrinityFileManager::parentDir(const std::string& filePath) {
     return filePath.substr(0, pos);
 }
 
+// Санитизация имени файла (см. объявление в заголовке).
+// Работаем по байтам: запрещённые символы Windows — чистый ASCII, поэтому
+// многобайтовые UTF-8 последовательности (кириллица и т.п.) их не содержат
+// и проходят без изменений (старший бит байта всегда >= 0x80 > 0x20).
+std::string TrinityFileManager::sanitizeFileName(const std::string& nameUtf8) {
+    static const char kForbidden[] = "<>:\"/\\|?*";
+    std::string out;
+    out.reserve(nameUtf8.size());
+    for (char c : nameUtf8) {
+        unsigned char u = static_cast<unsigned char>(c);
+        if (u < 0x20 || strchr(kForbidden, c))
+            out += '_';
+        else
+            out += c;
+    }
+    // Убираем точки и пробелы в начале и конце:
+    //  - "..." / ".." превращаются в пустую строку -> path traversal невозможен;
+    //  - имя с точкой/пробелом на конце Windows тихо обрезает при создании файла.
+    const char* kTrim = ". ";
+    size_t b = out.find_first_not_of(kTrim);
+    if (b == std::string::npos) return "_empty";      // пусто или одни точки/пробелы
+    size_t e = out.find_last_not_of(kTrim);
+    out = out.substr(b, e - b + 1);
+
+    // Ограничение длины имени файла: MAX_PATH (260) минус запас на базовый путь
+    // и расширение ".dwg". Обрезаем по границе UTF-8 символа, чтобы не оставить
+    // битый байт в конце имени.
+    const size_t kMaxNameLen = 120;                    // достаточно для кодов нейронов
+    if (out.size() > kMaxNameLen) {
+        size_t cut = kMaxNameLen;
+        while (cut > 0 &&
+               (static_cast<unsigned char>(out[cut]) & 0xC0) == 0x80) {
+            --cut;                                     // не режем многобайтовый символ
+        }
+        out.resize(cut);
+        // Если ровно на границе усечения остался незавершённый многобайтовый
+        // символ (обрывок посреди последовательности) — отрезаем его: последний
+        // байт имени обязан быть lead-байтом (0xxxxxxx или 11xxxxxx).
+        while (!out.empty()) {
+            unsigned char last = static_cast<unsigned char>(out[out.size() - 1]);
+            if ((last & 0xC0) != 0x80) break;          // это начало символа — всё целое
+            out.pop_back();                            // continuation-обрывок -> убрать
+        }
+        // после усечения могли снова появиться точка/пробел на конце
+        size_t ne = out.find_last_not_of(kTrim);
+        if (ne == std::string::npos) return "_empty";
+        out.resize(ne + 1);
+    }
+    return out;
+}
+
 TrinityFileManager::TrinityFileManager(const std::string& basePath)
     : m_basePath(basePath) {
     // Рекурсивно: если m_basePath ещё нет вместе с промежуточными папками —
@@ -96,7 +147,10 @@ bool TrinityFileManager::fileExists(const std::string& code, const std::string& 
 }
 
 std::string TrinityFileManager::getFilePath(const std::string& code, const std::string& subdir) const {
-    return m_basePath + "\\" + subdir + "\\" + code + ".dwg";
+    // Санитизация: код нейрона из БД используется как имя файла напрямую —
+    // без фильтра символы '/' '\' '..' давали path traversal (запись вне
+    // базы), а '< > : " | ? *' и контрольные символы — сбой saveAs/attach.
+    return m_basePath + "\\" + sanitizeFileName(subdir) + "\\" + sanitizeFileName(code) + ".dwg";
 }
 
 AcDbDatabase* TrinityFileManager::createEmptyDwg() {
@@ -141,7 +195,9 @@ AcDbObjectId TrinityFileManager::attachXref(
     if (!targetDb) return AcDbObjectId::kNull;
 
     std::wstring pathW = utf8ToWideLocal(path);
-    std::wstring nameW = utf8ToWideLocal(name);
+    // Имя блока в AutoCAD наследует правила имён файлов: запрещены
+    // < > : " / \ | ? = , ; и ( ) — код нейрона из БД санитизируется.
+    std::wstring nameW = utf8ToWideLocal(sanitizeFileName(name));
     if (pathW.empty() || nameW.empty()) {
         acutPrintf(_T("\n[FileManager] Bad path/name encoding: %hs\n"), path.c_str());
         return AcDbObjectId::kNull;

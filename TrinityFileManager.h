@@ -19,6 +19,14 @@ public:
     // Родительская директория полного пути к файлу ('\' и '/' — разделители).
     static std::string parentDir(const std::string& filePath);
 
+    // Санитизация имени файла: код нейрона/детали приходит из БД (UTF-8) и
+    // используется как имя DWG без изменений. Функция заменяет запрещённые
+    // символы Windows (< > : " / \ | ? *), управляющие символы <0x20, точки
+    // в начале/конце (блокируют '..' path traversal и имена с точкой на конце)
+    // на '_'. Пустой результат -> "_empty". Возвращает исходную строку без
+    // изменений, если она уже корректна.
+    static std::string sanitizeFileName(const std::string& nameUtf8);
+
     bool fileExists(const std::string& code, const std::string& subdir) const;
     std::string getFilePath(const std::string& code, const std::string& subdir) const;
 
