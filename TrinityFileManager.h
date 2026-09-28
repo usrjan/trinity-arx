@@ -30,6 +30,14 @@ public:
     bool fileExists(const std::string& code, const std::string& subdir) const;
     std::string getFilePath(const std::string& code, const std::string& subdir) const;
 
+    // Единый хелпер: подкаталог по типу нейрона (было 3 копии if/else в
+    // TrinityBuildEngine.cpp). detail -> details, assembly/construction ->
+    // assemblies, всё остальное -> projects.
+    std::string subdirForType(const std::string& type) const;
+    // Подкаталог + полный путь к DWG за один вызов (устраняет связку из
+    // трёх строк «subdir = ...; filePath = getFilePath(...)» в каждом месте).
+    std::string getFilePathForNeuron(const std::string& code, const std::string& type) const;
+
     static AcDbDatabase* createEmptyDwg();
     static bool saveDwg(AcDbDatabase* db, const std::string& path);
 

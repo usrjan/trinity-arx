@@ -153,6 +153,20 @@ std::string TrinityFileManager::getFilePath(const std::string& code, const std::
     return m_basePath + "\\" + sanitizeFileName(subdir) + "\\" + sanitizeFileName(code) + ".dwg";
 }
 
+// Единая точка маппинга «тип нейрона -> подкаталог». Раньше эта же
+// if/else-цепочка была скопирована трижды в TrinityBuildEngine.cpp
+// (ensureExists / ensureFileExists / deleteProjectFiles).
+std::string TrinityFileManager::subdirForType(const std::string& type) const {
+    if (type == "detail") return detailsDir();
+    if (type == "assembly" || type == "construction") return assembliesDir();
+    return projectsDir();
+}
+
+std::string TrinityFileManager::getFilePathForNeuron(const std::string& code, const std::string& type) const {
+    return getFilePath(code, subdirForType(type));
+}
+
+
 AcDbDatabase* TrinityFileManager::createEmptyDwg() {
     return new AcDbDatabase(Adesk::kTrue, Adesk::kTrue);
 }

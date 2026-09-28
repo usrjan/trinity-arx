@@ -21,6 +21,37 @@ int TrinityLayerManager::colorIndex(const std::string& materialCode) {
 }
 
 // ============================================
+// СОЗДАТЬ/ПОЛУЧИТЬ СЛОЙ ПО ИМЕНИ (общий хелпер)
+// Единственная реализация цикла «открыть LayerTable -> has -> add/getAt»,
+// из которой теперь строятся все остальные ensure*-функции.
+// ============================================
+AcDbObjectId TrinityLayerManager::createOrGetLayerByName(AcDbDatabase* db, const wchar_t* wName, int colorIndex, bool off) {
+    if (!db || !wName || !*wName) return AcDbObjectId::kNull;
+
+    AcDbLayerTable* pLayerTable = nullptr;
+    if (db->getSymbolTable(pLayerTable, AcDb::kForWrite) != Acad::eOk) return AcDbObjectId::kNull;
+
+    AcDbObjectId layerId = AcDbObjectId::kNull;
+    if (!pLayerTable->has(wName)) {
+        AcDbLayerTableRecord* pRecord = new AcDbLayerTableRecord();
+        pRecord->setName(wName);
+
+        AcCmColor color;
+        color.setColorIndex(colorIndex);
+        pRecord->setColor(color);
+        if (off) pRecord->setIsOff(true);
+
+        pLayerTable->add(layerId, pRecord);
+        pRecord->close();
+    } else {
+        pLayerTable->getAt(wName, layerId);
+    }
+
+    pLayerTable->close();
+    return layerId;
+}
+
+// ============================================
 // СОЗДАТЬ ИЛИ ПОЛУЧИТЬ СЛОЙ МАТЕРИАЛА
 // ============================================
 AcDbObjectId TrinityLayerManager::createOrGetLayer(AcDbDatabase* db, const std::string& materialCode) {
@@ -31,71 +62,24 @@ AcDbObjectId TrinityLayerManager::createOrGetLayer(AcDbDatabase* db, const std::
     std::wstring layerNameW = utf8ToWide(name);
     if (layerNameW.empty()) return AcDbObjectId::kNull;
 
-    AcDbLayerTable* pLayerTable = nullptr;
-    if (db->getSymbolTable(pLayerTable, AcDb::kForWrite) != Acad::eOk) return AcDbObjectId::kNull;
-
-    AcDbObjectId layerId;
-    if (!pLayerTable->has(layerNameW.c_str())) {
-        AcDbLayerTableRecord* pRecord = new AcDbLayerTableRecord();
-        pRecord->setName(layerNameW.c_str());
-
-        AcCmColor color;
-        color.setColorIndex(colorIndex(materialCode));
-        pRecord->setColor(color);
-
-        pLayerTable->add(layerId, pRecord);
-        pRecord->close();
-    } else {
-        pLayerTable->getAt(layerNameW.c_str(), layerId);
-    }
-
-    pLayerTable->close();
-    return layerId;
+    return createOrGetLayerByName(db, layerNameW.c_str(), colorIndex(materialCode), /*off=*/false);
 }
 
 // ============================================
-// СЛОЙ _tag (красный, выключен)
+// ТЕХНИЧЕСКИЕ СЛОИ (_tag, _bolt): красный, выключен
+// Раньше это были две посимвольно одинаковые копии; ensureTagLayer в
+// TrinityAttributeBuilder — третья. Все три ведут в этот хелпер.
 // ============================================
+static void ensureTechLayer(AcDbDatabase* db, const char* nameUtf8) {
+    std::wstring w = utf8ToWide(nameUtf8);
+    if (w.empty()) return;
+    TrinityLayerManager::createOrGetLayerByName(db, w.c_str(), 1, /*off=*/true);
+}
+
 void TrinityLayerManager::ensureTagLayer(AcDbDatabase* db) {
-    AcDbLayerTable* pLayerTable = nullptr;
-    if (db->getSymbolTable(pLayerTable, AcDb::kForWrite) != Acad::eOk) return;
-
-    if (!pLayerTable->has(_T("_tag"))) {
-        AcDbLayerTableRecord* pRecord = new AcDbLayerTableRecord();
-        pRecord->setName(_T("_tag"));
-
-        AcCmColor color;
-        color.setColorIndex(1);
-        pRecord->setColor(color);
-        pRecord->setIsOff(true);
-
-        AcDbObjectId layerId = AcDbObjectId::kNull;
-        pLayerTable->add(layerId, pRecord);
-        pRecord->close();
-    }
-
-    pLayerTable->close();
+    ensureTechLayer(db, LAYER_TAG);
 }
-// ============================================
-// СЛОЙ _bolt (красный, выключен)
-// ============================================
+
 void TrinityLayerManager::ensureBoltLayer(AcDbDatabase* db) {
-    AcDbLayerTable* pLayerTable = nullptr;
-    if (db->getSymbolTable(pLayerTable, AcDb::kForWrite) != Acad::eOk) return;
-
-    if (!pLayerTable->has(_T("_bolt"))) {
-        AcDbLayerTableRecord* pRecord = new AcDbLayerTableRecord();
-        pRecord->setName(_T("_bolt"));
-
-        AcCmColor color;
-        color.setColorIndex(1);
-        pRecord->setColor(color);
-        pRecord->setIsOff(true);
-
-        AcDbObjectId layerId = AcDbObjectId::kNull;
-        pLayerTable->add(layerId, pRecord);
-        pRecord->close();
-    }
-
-    pLayerTable->close();
+    ensureTechLayer(db, LAYER_BOLT);
 }
