@@ -155,7 +155,7 @@ std::string TrinityFileManager::getFilePath(const std::string& code, const std::
 
 // Единая точка маппинга «тип нейрона -> подкаталог». Раньше эта же
 // if/else-цепочка была скопирована трижды в TrinityBuildEngine.cpp
-// (ensureExists / ensureFileExists / deleteProjectFiles).
+// (ensureFileExists / deleteProjectFiles и удалённый ensureExists).
 std::string TrinityFileManager::subdirForType(const std::string& type) const {
     if (type == "detail") return detailsDir();
     if (type == "assembly" || type == "construction") return assembliesDir();
@@ -323,7 +323,12 @@ AcDbObjectId TrinityFileManager::attachXref(
         return AcDbObjectId::kNull;
     }
 
-    // Шаг 4: Добавляем BlockReference в Model Space
+    // Шаг 4: Регистрация блока достаточна для внешней базы; BlockReference
+    // создаём только в рабочей (current) базе.
+    if (!targetDb->isCurrent()) {
+        return blockId;   // блок уже вставлен в таблицу блоков targetDb
+    }
+
     AcDbBlockTable* pBt = nullptr;
     es = targetDb->getSymbolTable(pBt, AcDb::kForRead);
     if (es != Acad::eOk) {

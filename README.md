@@ -23,8 +23,8 @@ TrinityARX читает **нейроны** и **синапсы** из MySQL
                  │    
 ┌────────────────┴───────────────────────┐    
 │  TrinityBuildEngine                    │    
-│  Рекурсивный ensureExists /            │    
-│  ensureFileExists                      │    
+│  Рекурсивный ensureFileExists /        │    
+│  insertProjectToTarget                 │    
 └────────────────┬───────────────────────┘    
                  │    
 ┌────────────────┴───────────────────────┐    

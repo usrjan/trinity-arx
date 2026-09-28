@@ -7,87 +7,13 @@
 #include <io.h>
 
 // ============================================================
-// ГЛАВНЫЙ РЕКУРСИВНЫЙ МЕТОД
+// ПРИМЕЧАНИЕ: метод ensureExists удалён как мёртвый код.
+// Он не вызывался ни из одного пути сборки (processAllProjects ->
+// ensureFileExists строит файлы без вставки XREF; buildDwg использует
+// ensureFileExists + attachXref во временную базу). Вместо него параметр
+// targetDb теперь реально используется: processAllProjects вставляет
+// готовый DWG проекта в активный документ через insertProjectToTarget.
 // ============================================================
-// Логика:
-//   1. Загружаем нейрон по коду
-//   2. Определяем подкаталог (details/assemblies/projects)
-//   3. Если файл есть — вставляем XREF и выходим
-//   4. Если файла нет:
-//      - для detail  → buildDetail
-//      - для assembly/construction/project → buildDwg
-//   5. Сохраняем DWG через saveDwg
-//   6. Вставляем XREF
-// ============================================================
-AcDbObjectId TrinityBuildEngine::ensureExists(const std::string& code,
-                                                const AcGePoint3d& position,
-                                                const TrinityRotationCompound& rotation,
-                                                AcDbDatabase* targetDb,
-                                                int depth) {
-    // Защита от бесконечной рекурсии
-    if (depth > 20) {
-        wchar_t* wCode = utf2uni(code.c_str());
-        acutPrintf(_T("\n[BuildEngine] MAX DEPTH reached for %ls\n"), wCode);
-        free(wCode);
-        return AcDbObjectId::kNull;
-    }
-
-    // 1. Загружаем нейрон
-    TrinityNeuron* pNeuron = m_core.loadNeuronByCode(code);
-    if (!pNeuron) {
-        wchar_t* wCode = utf2uni(code.c_str());
-        acutPrintf(_T("\n[BuildEngine] Neuron not found: %ls\n"), wCode);
-        free(wCode);
-        return AcDbObjectId::kNull;
-    }
-
-    TrinityNeuron neuron = *pNeuron;
-    delete pNeuron;
-
-    // 2. Подкаталог и путь — через единый хелпер FileManager
-    std::string subdir = m_files.subdirForType(neuron.type);
-    std::string filePath = m_files.getFilePath(neuron.code, subdir);
-
-    // 3. Если файл существует — вставляем XREF
-    if (m_files.fileExists(neuron.code, subdir)) {
-        wchar_t* wCode = utf2uni(neuron.code.c_str());
-        acutPrintf(_T("\n[BuildEngine] EXISTS: %ls (depth=%d)\n"), wCode, depth);
-        free(wCode);
-
-        return m_files.attachXref(filePath, neuron.code, position, rotation, targetDb);
-    }
-
-    // 4. Файла нет — строим
-    wchar_t* wCode = utf2uni(neuron.code.c_str());
-    wchar_t* wType = utf2uni(neuron.type.c_str());
-    acutPrintf(_T("\n[BuildEngine] BUILDING: %ls (type=%ls, depth=%d)\n"),
-               wCode, wType, depth);
-    free(wCode);
-    free(wType);
-
-    AcDbDatabase* cleanDb = nullptr;
-
-    if (neuron.type == "detail") {
-        cleanDb = buildDetail(neuron);
-    } else {
-        cleanDb = buildDwg(neuron, depth);
-    }
-
-    if (!cleanDb) {
-        return AcDbObjectId::kNull;
-    }
-
-    // 5. Сохраняем (путь может содержать кириллицу и отсутствующие промежуточные папки)
-    ensureDirectoryForFile(filePath);
-    m_files.saveDwg(cleanDb, filePath);
-    delete cleanDb;
-
-    // Пауза для файловой системы
-    Sleep(200);
-
-    // 6. Вставляем XREF
-    return m_files.attachXref(filePath, neuron.code, position, rotation, targetDb);
-}
 
 // ============================================================
 // ПОСТРОЕНИЕ ДЕТАЛИ
@@ -507,6 +433,25 @@ std::string TrinityBuildEngine::ensureFileExists(const std::string& code, int de
 }
 
 // ============================================================
+// ВСТАВКА ГОТОВОГО ПРОЕКТА В ЦЕЛЕВУЮ БАЗУ (активный документ)
+// ============================================================
+// Реализация назначения параметра targetDb после удаления мёртвого
+// ensureExists: вся работа выполняется в attachXref — регистрация
+// XREF-блока в таблице блоков targetDb и (для рабочей базы) создание
+// BlockReference в Model Space. Позиция — начало координат, поворот —
+// отсутствие.
+// ============================================================
+AcDbObjectId TrinityBuildEngine::insertProjectToTarget(const std::string& filePathUtf8,
+                                                       const std::string& neuronCode,
+                                                       AcDbDatabase* targetDb) {
+    if (!targetDb || filePathUtf8.empty()) return AcDbObjectId::kNull;
+
+    TrinityRotationCompound noRotation;   // count = 0 => без поворота
+    return m_files.attachXref(
+        filePathUtf8, neuronCode, AcGePoint3d::kOrigin, noRotation, targetDb);
+}
+
+// ============================================================
 // ОБРАБОТКА ВСЕХ PENDING-ПРОЕКТОВ
 // ============================================================
 int TrinityBuildEngine::processAllProjects(AcDbDatabase* targetDb) {
@@ -535,6 +480,18 @@ int TrinityBuildEngine::processAllProjects(AcDbDatabase* targetDb) {
 
         // Отмечаем done — файл создан
         m_core.markNeuronDone(proj.id);
+
+        // Вставляем готовый DWG проекта как XREF в целевую базу
+        // (активный документ AutoCAD). Раньше targetDb в движке не
+        // использовался нигде — теперь у него есть реальное назначение.
+        if (targetDb) {
+            AcDbObjectId refId = insertProjectToTarget(actualPath, proj.code, targetDb);
+            if (refId == AcDbObjectId::kNull) {
+                wchar_t* wCodeIns = utf2uni(proj.code.c_str());
+                acutPrintf(_T("\n[BuildEngine] Insert to drawing failed: %ls\n"), wCodeIns);
+                free(wCodeIns);
+            }
+        }
 
         wchar_t* wCode = utf2uni(proj.code.c_str());
         acutPrintf(_T("\n[BuildEngine] Project done: %ls\n"), wCode);
