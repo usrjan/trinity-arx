@@ -46,4 +46,9 @@ public:
 
     // Главный метод: обработать все pending-проекты
     int processAllProjects(AcDbDatabase* targetDb);
+
+    // TRIB (этап разработки): нарисовать в текущем открытом чертеже
+    // все планки (детали с category='rib') из базы, одну за другой с отступом.
+    // Возвращает количество нарисованных планок (-1 при ошибке подключения).
+    int drawDetailsByCategory(const std::string& category, AcDbDatabase* targetDb);
 };

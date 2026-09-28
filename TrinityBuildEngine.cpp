@@ -537,6 +537,66 @@ int TrinityBuildEngine::processAllProjects(AcDbDatabase* targetDb) {
 }
 
 // ============================================================
+// TRIB: РИСОВАНИЕ ПЛАНОК (category='rib') В ТЕКУЩЕМ ЧЕРТЕЖЕ
+// ============================================================
+// Отладочная команда этапа разработки: берёт из базы все детали
+// указанной категории и вставляет каждую как XREF её DWG в
+// модель активного чертежа, с шагом по оси Y, чтобы планки не
+// перекрывались.
+// Вызывается ТОЛЬКО из команды TRIB (главный поток, активный
+// документ залочен на запись) — писать в targetDb здесь легально.
+// ============================================================
+int TrinityBuildEngine::drawDetailsByCategory(const std::string& category,
+                                              AcDbDatabase* targetDb) {
+    if (!targetDb) return -1;
+
+    auto details = m_core.loadDetailsByCategory(category);
+    if (details.empty()) {
+        wchar_t* wCat = utf2uni(category.c_str());
+        acutPrintf(_T("\n[TRIB] No '%s' details found in database.\n"), wCat);
+        free(wCat);
+        return 0;
+    }
+
+    const double GAP = 100.0;   // отступ между планками по оси Y
+    int drawn = 0;
+    double yOffset = 0.0;
+
+    for (auto& det : details) {
+        wchar_t* wCode = utf2uni(det.code.c_str());
+
+        // 1. Убедимся, что DWG детали существует (построит, если нет)
+        std::string filePath = ensureFileExists(det.code, 0);
+        if (filePath.empty()) {
+            acutPrintf(_T("\n[TRIB] Failed to build detail: %s\n"), wCode);
+            free(wCode);
+            continue;
+        }
+
+        // 2. Вставляем XREF в текущий открытый чертёж
+        TrinityRotationCompound noRot; // count = 0 — без поворота
+        AcGePoint3d pos(0.0, yOffset, 0.0);
+
+        AcDbObjectId id = m_files.attachXref(filePath, det.code, pos, noRot, targetDb);
+        if (id.isNull()) {
+            acutPrintf(_T("\n[TRIB] attachXref failed: %s\n"), wCode);
+            free(wCode);
+            continue;
+        }
+
+        acutPrintf(_T("\n[TRIB] Placed %s at Y=%.1f (W=%d H=%d T=%d)\n"),
+                   wCode, yOffset, det.width, det.height, det.thickness);
+        free(wCode);
+
+        drawn++;
+        // Следующая планка — выше текущей + отступ (планка занимает Y ∈ [0..width])
+        yOffset += det.width + GAP;
+    }
+
+    return drawn;
+}
+
+// ============================================================
 // УДАЛЕНИЕ ФАЙЛОВ ПРОЕКТА (рекурсивно по детям)
 // ============================================================
 void TrinityBuildEngine::deleteProjectFiles(const std::string& code) {

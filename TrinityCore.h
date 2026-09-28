@@ -84,6 +84,9 @@ public:
     // Проекты
     std::vector<TrinityNeuron> loadPendingProjects();
 
+    // Все детали заданной категории (например, category='rib') — для команды TRIB
+    std::vector<TrinityNeuron> loadDetailsByCategory(const std::string& category);
+
     // Статусы
     bool markNeuronDone(int id);
 

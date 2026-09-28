@@ -189,6 +189,41 @@ std::vector<TrinityNeuron> TrinityCore::loadPendingProjects() {
 }
 
 // ============================================
+// ЗАГРУЗКА ДЕТАЛЕЙ ПО КАТЕГОРИИ (TRIB)
+// ============================================
+std::vector<TrinityNeuron> TrinityCore::loadDetailsByCategory(const std::string& category) {
+    std::vector<TrinityNeuron> details;
+    if (!m_connected) return details;
+
+    const std::string query =
+        "SELECT id, "
+        "  JSON_UNQUOTE(JSON_EXTRACT(data, '$.code')), "
+        "  type, "
+        "  COALESCE(JSON_UNQUOTE(JSON_EXTRACT(data, '$.category')), ''), "
+        "  COALESCE(JSON_UNQUOTE(JSON_EXTRACT(data, '$.material')), 'PLYWOOD-FSF'), "
+        "  COALESCE(JSON_UNQUOTE(JSON_EXTRACT(data, '$.status')), ''), "
+        "  data "
+        "FROM neuron "
+        "WHERE type = 'detail' "
+        "  AND JSON_UNQUOTE(JSON_EXTRACT(data, '$.category')) = " + escapeSqlLiteral(category) + " "
+        "  AND is_deleted = 0 "
+        "ORDER BY CAST(JSON_UNQUOTE(JSON_EXTRACT(data, '$.sort')) AS UNSIGNED), id";
+
+    if (mysql_query(m_mysql, query.c_str()) != 0) return details;
+
+    MYSQL_RES* result = mysql_store_result(m_mysql);
+    if (!result) return details;
+
+    MYSQL_ROW row;
+    while ((row = mysql_fetch_row(result))) {
+        details.push_back(parseNeuronRow(row));
+    }
+
+    mysql_free_result(result);
+    return details;
+}
+
+// ============================================
 // ОТМЕТКА "DONE"
 // ============================================
 bool TrinityCore::markNeuronDone(int id) {

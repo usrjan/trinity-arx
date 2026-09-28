@@ -121,3 +121,52 @@ void trinityProcess() {
         g_isProcessing = false;
     }
 }
+
+// ============================================
+// TRIB — нарисовать все планки (category='rib')
+// в текущем открытом чертеже (этап разработки)
+// ============================================
+void trinityDrawRibs() {
+    // Нет движка (таймер не запущен) — создаём временный из trinity.ini
+    bool tempEngine = false;
+    if (!g_engine) {
+        TrinityDbConfig cfg;
+        if (!loadTrinityConfig(cfg)) {
+            acutPrintf(_T("\n[TRIB] Config load failed. Run TSTART or fix trinity.ini.\n"));
+            return;
+        }
+        g_engine = new TrinityBuildEngine(cfg.basePath);
+        if (!g_engine->init(cfg.host.c_str(), cfg.user.c_str(),
+                            cfg.pass.c_str(), cfg.db.c_str())) {
+            acutPrintf(_T("\n[TRIB] Failed to connect to database.\n"));
+            delete g_engine;
+            g_engine = nullptr;
+            return;
+        }
+        tempEngine = true;
+    }
+
+    __try {
+        // Команда выполняется из command-потока AutoCAD — активный документ
+        // уже залочен на запись, писать в workingDatabase() легально.
+        AcDbDatabase* db = acdbHostApplicationServices()->workingDatabase();
+        if (!db) {
+            acutPrintf(_T("\n[TRIB] No active drawing.\n"));
+        } else {
+            int drawn = g_engine->drawDetailsByCategory("rib", db);
+            if (drawn < 0) {
+                acutPrintf(_T("\n[TRIB] Database connection lost. Try TSTART.\n"));
+            } else {
+                acutPrintf(_T("\n[TRIB] Drawn %d rib(s) in current drawing.\n"), drawn);
+                if (drawn > 0) acedUpdateDisplay();
+            }
+        }
+    }
+    __finally {
+        if (tempEngine) {
+            g_engine->shutdown();
+            delete g_engine;
+            g_engine = nullptr;
+        }
+    }
+}

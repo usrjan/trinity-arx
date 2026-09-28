@@ -44,17 +44,68 @@ AcDb3dSolid* TrinityGeometryBuilder::buildSidewall(const TrinityNeuron& d) {
 }
 
 // ============================================
-// ПЛАНКА (со гнёздами)
+// ПЛАНКА (со гнёздами) — динамическая деталь
+// Все размеры берутся из нейрона (код D.S.3.<width>.<height>.<thickness>):
+//   W = d.width, H = d.height, T = d.thickness.
+// Параметры гнёзд можно переопределить полями JSON:
+//   "slotHalf"    — половина ширины прорези (по умолчанию 4.0)
+//   "slotDepth"   — глубина прямого паза от кромки (по умолчанию 23.54316771)
+//   "holeOffset"  — отступ точки дуги гнезда от кромки (по умолчанию 53.0)
 // ============================================
+
+// Простой поиск числового значения поля верхнего уровня в JSON-строке.
+static bool jsonGetDouble(const std::string& json, const char* key, double& out) {
+    std::string pat = std::string("\"") + key + "\"";
+    size_t p = json.find(pat);
+    if (p == std::string::npos) return false;
+    size_t colon = json.find(':', p + pat.size());
+    if (colon == std::string::npos) return false;
+    char* endp = nullptr;
+    double v = strtod(json.c_str() + colon + 1, &endp);
+    if (endp == json.c_str() + colon + 1) return false; // не число
+    out = v;
+    return true;
+}
+
 AcDb3dSolid* TrinityGeometryBuilder::buildRib(const TrinityNeuron& d) {
-    double W = d.width;
-    double H = 125.0;
-    double T = d.thickness;
+    double W = d.width;       // длина планки
+    double H = d.height;      // высота планки (было хардкод 125.0)
+    double T = d.thickness;   // толщина планки
+    if (W <= 0 || H <= 0 || T <= 0) {
+        acutPrintf(_T("\n[GeometryBuilder] Rib invalid dimensions: W=%.3f H=%.3f T=%.3f\n"),
+                   W, H, T);
+        return nullptr;
+    }
     double centerY = H / 2.0;
 
-    const double SLOT_HALF = 4.0;
-    const double SLOT_DEPTH = 23.54316771;
-    const double HOLE_OFFSET = 53.0;
+    // Геометрия гнёзда — по умолчанию как раньше, но переопределяется
+    // свойствами нейрона (см. комментарий выше).
+    double SLOT_HALF   = 4.0;
+    double SLOT_DEPTH  = 23.54316771;
+    double HOLE_OFFSET = 53.0;
+    jsonGetDouble(d.jsonData, "slotHalf",   SLOT_HALF);
+    jsonGetDouble(d.jsonData, "slotDepth",  SLOT_DEPTH);
+    jsonGetDouble(d.jsonData, "holeOffset", HOLE_OFFSET);
+
+    // Защита от вырожденной геометрии: гнёзда не должны вылезти за пределы
+    // планки по высоте. Дуга гнезда — это AcGeCircArc2d по трём точкам
+    // (centerY±SLOT_HALF, W-SLOT_DEPTH) и (centerY, W-HOLE_OFFSET).
+    // Её радиус считаем так же, как ObjectARX внутри AcGeCircArc2d:
+    //   chord = 2*SLOT_HALF (вертикальная хорда),
+    //   sagitta = |HOLE_OFFSET - SLOT_DEPTH| (стрелка прогиба),
+    //   r = (chord^2 + 4*sagitta^2) / (8*sagitta)   → при chord=8, sag≈29.457 r=15
+    // Требуем, чтобы дуга целиком осталась внутри планки: centerY - r > 0.
+    double socketRadius = ((2.0 * SLOT_HALF) * (2.0 * SLOT_HALF)
+                           + 4.0 * (HOLE_OFFSET - SLOT_DEPTH) * (HOLE_OFFSET - SLOT_DEPTH))
+                          / (8.0 * (HOLE_OFFSET - SLOT_DEPTH));
+    if (socketRadius < 0) socketRadius = -socketRadius;
+    if (SLOT_HALF <= 0 || SLOT_DEPTH <= 0 || HOLE_OFFSET <= SLOT_DEPTH ||
+        HOLE_OFFSET >= W - SLOT_DEPTH || 2.0 * SLOT_HALF >= H ||
+        centerY - socketRadius <= 0.0) {
+        acutPrintf(_T("\n[GeometryBuilder] Rib socket params out of range for W=%.3f H=%.3f\n"),
+                   W, H);
+        return nullptr;
+    }
 
     // --------------------------------------------------
     // ЛЕВОЕ ОТВЕРСТИЕ (X=0, дуга поперёк прорези)
@@ -111,17 +162,19 @@ AcDb3dSolid* TrinityGeometryBuilder::buildRib(const TrinityNeuron& d) {
     // --------------------------------------------------
     AcDbPolyline* pPoly = new AcDbPolyline(12);
 
+    // Контур лежит в плоскости XY: X ∈ [0..H] (высота планки),
+    // Y ∈ [0..W] (длина планки). Все точки — из динамических переменных.
     pPoly->addVertexAt(0, AcGePoint2d(0.0, W), 0, 0, 0);
-    pPoly->addVertexAt(1, AcGePoint2d(centerY - 4.0, W), 0, 0, 0);
+    pPoly->addVertexAt(1, AcGePoint2d(centerY - SLOT_HALF, W), 0, 0, 0);
     pPoly->addVertexAt(2, pt11, tan((end1Angle - new1Start) / 4.0), 0, 0);
     pPoly->addVertexAt(3, pt12, 0, 0, 0);
-    pPoly->addVertexAt(4, AcGePoint2d(centerY + 4.0, W), 0, 0, 0);
+    pPoly->addVertexAt(4, AcGePoint2d(centerY + SLOT_HALF, W), 0, 0, 0);
     pPoly->addVertexAt(5, AcGePoint2d(H, W), 0, 0, 0);
     pPoly->addVertexAt(6, AcGePoint2d(H, 0.0), 0, 0, 0);
-    pPoly->addVertexAt(7, AcGePoint2d(centerY + 4.0, 0.0), 0, 0, 0);
+    pPoly->addVertexAt(7, AcGePoint2d(centerY + SLOT_HALF, 0.0), 0, 0, 0);
     pPoly->addVertexAt(8, pt21, tan((end2Angle - new2Start) / 4.0), 0, 0);
     pPoly->addVertexAt(9, pt22, 0, 0, 0);
-    pPoly->addVertexAt(10, AcGePoint2d(centerY - 4.0, 0.0), 0, 0, 0);
+    pPoly->addVertexAt(10, AcGePoint2d(centerY - SLOT_HALF, 0.0), 0, 0, 0);
     pPoly->addVertexAt(11, AcGePoint2d(0.0, 0.0), 0, 0, 0);
 
     if (!pPoly->isClosed()) pPoly->setClosed(true);
@@ -135,6 +188,12 @@ AcDb3dSolid* TrinityGeometryBuilder::buildRib(const TrinityNeuron& d) {
 
     AcGePoint3d p1(0.0, 0.0, 0.0);
     AcGeVector3d v1(0.0, 0.0, 1.0);
+    // ВАЖНО (поведение сохранено один-в-один): здесь используется ОДНА матрица,
+    // у которой setToRotation() вызывается раньше, чем setTranslation() —
+    // второй вызов перезаписывает всю матрицу чистой трансляцией, поэтому
+    // фактическое преобразование = перенос на (0, H, 0) без поворота.
+    // Именно так планка строилась и раньше; менять это нельзя — ориентация
+    // рёбер в XREF задаётся синапсами (rot) в сборках.
     AcGeMatrix3d mat;
     mat.setToRotation(-(90.0 * (M_PI / 180.0)), v1, p1);
     mat.setTranslation(AcGeVector3d(0, H, 0));
