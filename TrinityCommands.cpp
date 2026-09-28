@@ -4,10 +4,6 @@
 #include "TrinityConfig.h"
 #include "TrinityTimer.h"   // безопасный таймер с document lock (см. TrinityTimer.h)
 
-// AcDbDocument объявлен в dbmain.h — в StdAfx.h он не подключается,
-// поэтому подключаем здесь напрямую.
-#include <dbmain.h>
-
 TrinityBuildEngine* g_engine = nullptr;
 UINT_PTR g_timerId = 0;
 
@@ -154,9 +150,12 @@ void trinityTrib() {
         ownEngine = true;
     }
 
-    AcDbDocument* pDoc = acDocManager->curDocument();   // requires <dbmain.h> (included above)
-    if (!pDoc || pDoc->isReadOnly()) {
-        acutPrintf(_T("\n[TRIB] No writable document is open.\n"));
+    // Проверяем, что есть открытый документ. Получаем его через
+    // acedGetDoc (стабильный C-интерфейс acdocman, не требует dbxdb.h):
+    // возвращает AcDbDatabase* текущего документа либо nullptr.
+    AcDbDatabase* pCurDb = nullptr;
+    if (acedGetDoc(&pCurDb) != RTNORM || pCurDb == nullptr) {
+        acutPrintf(_T("\n[TRIB] No document is open.\n"));
         if (ownEngine) { engine->shutdown(); delete engine; }
         return;
     }
