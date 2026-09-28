@@ -150,17 +150,16 @@ void trinityTrib() {
         ownEngine = true;
     }
 
-    // Проверяем, что есть открытый документ. Получаем его через
-    // acedGetDoc (стабильный C-интерфейс acdocman, не требует dbxdb.h):
-    // возвращает AcDbDatabase* текущего документа либо nullptr.
-    AcDbDatabase* pCurDb = nullptr;
-    if (acedGetDoc(&pCurDb) != RTNORM || pCurDb == nullptr) {
+    // Проверяем, что есть открытый документ: рабочая база данных — это
+    // и есть БД текущего чертежа. Если документа нет, workingDatabase()
+    // вернёт nullptr (либоacad без active doc). Никаких дополнительных
+    // SDK-заголовков (dbxdb.h/AcDbDocument) здесь не требуется.
+    AcDbDatabase* db = acdbHostApplicationServices()->workingDatabase();
+    if (db == nullptr) {
         acutPrintf(_T("\n[TRIB] No document is open.\n"));
         if (ownEngine) { engine->shutdown(); delete engine; }
         return;
     }
-
-    AcDbDatabase* db = acdbHostApplicationServices()->workingDatabase();
 
     // Трибуны не трогаем во время тика таймера — ждём, пока он закончит
     if (g_isProcessing) {
