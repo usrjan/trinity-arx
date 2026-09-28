@@ -5,6 +5,7 @@
 #include "TrinityLayerManager.h"
 #include "TrinityAttributeBuilder.h"
 #include <io.h>
+#include <cstring>   // strlen (парсинг holes)
 
 // ============================================================
 // ПРИМЕЧАНИЕ: вставка готового DWG проекта в текущий чертёж НЕ делается.
@@ -116,34 +117,51 @@ AcDbDatabase* TrinityBuildEngine::buildDetail(const TrinityNeuron& detail) {
 
         std::vector<AcGePoint3d> holePositions;
 
-        // Парсим holes из JSON
+        // Парсим holes из JSON (ручной поиск подстрок — временное решение,
+        // см. рекомендацию по nlohmann/json). Обходим массив поэлементно:
+        // границы каждого объекта {"..."} находятся по '{' и '}'.
+        // Исправлены две ошибки прежней версии:
+        //   1) бесконечный цикл: при отсутствии "y" индекс сдвигался как
+        //      npos + 1 (переполнение size_t -> 0) и поиск начинался заново;
+        //   2) склейка значений между объектами ("y" искался по всему массиву,
+        //      мог взять координату из следующего элемента или дать мусорный
+        //      ноль вместо пропуска неполного элемента).
         size_t holesPos = detail.jsonData.find("\"holes\"");
         if (holesPos != std::string::npos) {
             size_t arrStart = detail.jsonData.find('[', holesPos);
-            size_t arrEnd = detail.jsonData.find(']', arrStart);
+            if (arrStart != std::string::npos) {
+                size_t arrEnd = detail.jsonData.find(']', arrStart);
+                if (arrEnd != std::string::npos && arrEnd > arrStart) {
+                    std::string holesStr = detail.jsonData.substr(arrStart, arrEnd - arrStart + 1);
 
-            if (arrStart != std::string::npos && arrEnd != std::string::npos) {
-                std::string holesStr = detail.jsonData.substr(arrStart, arrEnd - arrStart + 1);
+                    // Извлекает числовое значение по ключу внутри одного объекта;
+                    // false — ключа или ':' нет.
+                    auto findNumInObj = [](const std::string& obj, const char* key, double& out) -> bool {
+                        size_t k = obj.find(key);
+                        if (k == std::string::npos) return false;
+                        size_t colon = obj.find(':', k + strlen(key));
+                        if (colon == std::string::npos) return false;
+                        out = atof(obj.c_str() + colon + 1);
+                        return true;
+                    };
 
-                size_t objPos = 0;
-                while ((objPos = holesStr.find("\"x\"", objPos)) != std::string::npos) {
-                    double x = 0, y = 0;
+                    size_t objStart = 0;
+                    while ((objStart = holesStr.find('{', objStart)) != std::string::npos) {
+                        size_t objEnd = holesStr.find('}', objStart);
+                        if (objEnd == std::string::npos) break;          // обрывок JSON — стоп
 
-                    size_t xVal = holesStr.find(':', objPos);
-                    if (xVal != std::string::npos) {
-                        x = atof(holesStr.c_str() + xVal + 1);
-                    }
-
-                    size_t yPos = holesStr.find("\"y\"", objPos);
-                    if (yPos != std::string::npos) {
-                        size_t yVal = holesStr.find(':', yPos);
-                        if (yVal != std::string::npos) {
-                            y = atof(holesStr.c_str() + yVal + 1);
+                        std::string obj = holesStr.substr(objStart, objEnd - objStart + 1);
+                        double x = 0, y = 0;
+                        bool hasX = findNumInObj(obj, "\"x\"", x);
+                        bool hasY = findNumInObj(obj, "\"y\"", y);
+                        if (hasX && hasY) {
+                            holePositions.push_back(AcGePoint3d(x, y, 0));
+                        } else if (hasX || hasY) {
+                            acutPrintf(_T("\n[BuildEngine] holes: incomplete element skipped: %hs\n"), obj.c_str());
                         }
-                    }
 
-                    holePositions.push_back(AcGePoint3d(x, y, 0));
-                    objPos = yPos + 1;
+                        objStart = objEnd + 1;                           // строгий прогресс
+                    }
                 }
             }
         }
