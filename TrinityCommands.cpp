@@ -151,11 +151,14 @@ void trinityRib() {
         return;
     }
 
-    // Точка вставки первой планки (по умолчанию 0,0,0)
+    // Точка вставки первой планки (по умолчанию 0,0,0).
+    // acedGetPoint: NULL-указатель на resbuf — допустимый способ задать
+    // статический промпт (приводится к ADSCMDBR); asDblArray — стандартный
+    // макрос ObjectARX для доступа к данным AcGePoint3d как к double[3].
     AcGePoint3d basePnt(0.0, 0.0, 0.0);
-    resbuf* promptRb = acedBuildResult(RTSTR, _T("\nInsertion point <0,0,0>: "));
-    int ret = acedGetPoint(nullptr, promptRb, asDblArray(basePnt));
-    acedRelResult(promptRb);
+    int ret = acedGetPoint(nullptr,
+                           _T("\nInsertion point <0,0,0>: "),
+                           asDblArray(basePnt));
     if (ret == RTCAN) return;   // Esc — выходим без изменений чертежа
 
     // Шаг раскладки — по фактической длине каждой планки + зазор,
@@ -195,8 +198,21 @@ void trinityRib() {
     }
 
     if (drawn > 0) {
-        // ZOOM Extents, чтобы результат был виден
-        acedCommandS(RTSTR, _T("_.ZOOM"), RTSTR, _T("_E"), RTNONE);
+        // ZOOM Extents, чтобы результат был виден.
+        // Программно, без acedCommandS(): модифицируем Active Viewport
+        // текущей активной таблицы (Model Space). Вызываемся из модальной
+        // команды — документ залочен, display-операции легальны.
+        AcDbObjectId layoutId = db->activeTableLayout();
+        AcDbLayout* pLayout = nullptr;
+        if (acdbOpenObject(pLayout, layoutId, AcDb::kForWrite) == Acad::eOk && pLayout) {
+            AcDbViewportTableRecord* pVtr = nullptr;
+            if (pLayout->activeViewport(pVtr, AcDb::kForWrite) == Acad::eOk && pVtr) {
+                pVtr->setZoomedToExtents();
+                pVtr->close();
+            }
+            pLayout->close();
+        }
+        acdbUpdateEyes(db);   // обновить дисплей после изменения view table
     }
 
     acutPrintf(_T("\n[Trinity] TRIB done: drawn=%d, skipped=%d\n"), drawn, skipped);

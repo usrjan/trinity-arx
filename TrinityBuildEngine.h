@@ -27,12 +27,6 @@ private:
     // Геометрия → временная база → wblock → чистая база
     AcDbDatabase* buildDetail(const TrinityNeuron& detail);
 
-    // Отладочная постройка детали ПРЯМО в целевую базу (без wblock/DWG-кэша).
-    // Используется командой TRIB: солид + болты + атрибут DETAIL_CODE.
-    // offset — смещение всей геометрии после постройки.
-    bool buildDetailToDb(const TrinityNeuron& detail, AcDbDatabase* targetDb,
-                         const AcGePoint3d& offset = AcGePoint3d::kOrigin);
-
     // Обеспечить существование файла детали/конструкции
     // Без вставки XREF. Возвращает путь к файлу.
     // Используется в buildDwg для рекурсивной подготовки детей.
@@ -54,4 +48,10 @@ public:
 
     // Главный метод: обработать все pending-проекты
     int processAllProjects(AcDbDatabase* targetDb);
+
+    // Отладочная постройка детали ПРЯМО в целевую базу (без wblock/DWG-кэша).
+    // Используется командой TRIB: солид + болты + атрибут DETAIL_CODE.
+    // offset — смещение всей геометрии после постройки.
+    bool buildDetailToDb(const TrinityNeuron& detail, AcDbDatabase* targetDb,
+                         const AcGePoint3d& offset = AcGePoint3d::kOrigin);
 };
