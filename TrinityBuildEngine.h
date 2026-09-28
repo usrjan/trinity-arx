@@ -9,14 +9,10 @@ private:
     TrinityCore m_core;
     TrinityFileManager m_files;
 
-    // Рекурсивное обеспечение существования DWG
-    // Если файл есть — вставляет XREF и возвращает его ID
-    // Если файла нет — строит его и потом вставляет XREF
-    AcDbObjectId ensureExists(const std::string& code,
-                               const AcGePoint3d& position,
-                               const TrinityRotationCompound& rotation,
-                               AcDbDatabase* targetDb,
-                               int depth = 0);
+    // Примечание: метод ensureExists (вставка XREF в целевую базу) удалён
+    // как мёртвый код — ни один путь сборки его не вызывал. Вставка готового
+    // DWG проекта в текущий документ выполняется методом insertProjectToTarget
+    // (вызывается из processAllProjects для активного документа).
 
     // Построить DWG конструкции/проекта из детей
     // Дети вставляются как XREF во временную базу,
@@ -42,6 +38,12 @@ private:
         return TrinityFileManager::createDirectoryRecursiveA(
                    TrinityFileManager::parentDir(filePathUtf8));
     }
+
+    // Вставка готового файла проекта как XREF + BlockReference в целевую базу
+    // (активный документ AutoCAD). Позиция — начало координат, без поворота.
+    AcDbObjectId insertProjectToTarget(const std::string& filePathUtf8,
+                                       const std::string& neuronCode,
+                                       AcDbDatabase* targetDb);
 
 public:
     TrinityBuildEngine(const std::string& basePath) : m_files(basePath) {}
