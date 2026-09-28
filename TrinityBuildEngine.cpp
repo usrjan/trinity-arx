@@ -44,16 +44,8 @@ AcDbObjectId TrinityBuildEngine::ensureExists(const std::string& code,
     TrinityNeuron neuron = *pNeuron;
     delete pNeuron;
 
-    // 2. Определяем подкаталог
-    std::string subdir;
-    if (neuron.type == "detail") {
-        subdir = m_files.detailsDir();
-    } else if (neuron.type == "assembly" || neuron.type == "construction") {
-        subdir = m_files.assembliesDir();
-    } else {
-        subdir = m_files.projectsDir();
-    }
-
+    // 2. Подкаталог и путь — через единый хелпер FileManager
+    std::string subdir = m_files.subdirForType(neuron.type);
     std::string filePath = m_files.getFilePath(neuron.code, subdir);
 
     // 3. Если файл существует — вставляем XREF
@@ -487,16 +479,8 @@ std::string TrinityBuildEngine::ensureFileExists(const std::string& code, int de
     TrinityNeuron neuron = *pNeuron;
     delete pNeuron;
 
-    // Определяем подкаталог
-    std::string subdir;
-    if (neuron.type == "detail") {
-        subdir = m_files.detailsDir();
-    } else if (neuron.type == "assembly" || neuron.type == "construction") {
-        subdir = m_files.assembliesDir();
-    } else {
-        subdir = m_files.projectsDir();
-    }
-
+    // Подкаталог и путь — через единый хелпер FileManager
+    std::string subdir = m_files.subdirForType(neuron.type);
     std::string filePath = m_files.getFilePath(neuron.code, subdir);
 
     // Если файл уже есть — возвращаем путь
@@ -571,16 +555,8 @@ void TrinityBuildEngine::deleteProjectFiles(const std::string& code) {
     TrinityNeuron neuron = *pNeuron;
     delete pNeuron;
 
-    // Определяем подкаталог и путь к файлу
-    std::string subdir;
-    if (neuron.type == "detail") {
-        subdir = m_files.detailsDir();
-    } else if (neuron.type == "assembly" || neuron.type == "construction") {
-        subdir = m_files.assembliesDir();
-    } else {
-        subdir = m_files.projectsDir();
-    }
-
+    // Подкаталог и путь к файлу — через единый хелпер FileManager
+    std::string subdir = m_files.subdirForType(neuron.type);
     std::string filePath = m_files.getFilePath(neuron.code, subdir);
 
     // Удаляем файл, если он существует
