@@ -9,10 +9,12 @@ private:
     TrinityCore m_core;
     TrinityFileManager m_files;
 
-    // Примечание: метод ensureExists (вставка XREF в целевую базу) удалён
-    // как мёртвый код — ни один путь сборки его не вызывал. Вставка готового
-    // DWG проекта в текущий документ выполняется методом insertProjectToTarget
-    // (вызывается из processAllProjects для активного документа).
+    // Примечание: вставка готового DWG проекта в текущий чертёж не
+    // выполняется (ensureExists удалён как мёртвый код, реализованная
+    // вместо него insertProjectToTarget вызывала ошибку 320 при работе
+    // с активным документом и убрана). Результат сборки — файлы DWG
+    // на диске; attachXref используется только внутри buildDwg для
+    // вставки детей во временную базу.
 
     // Построить DWG конструкции/проекта из детей
     // Дети вставляются как XREF во временную базу,
@@ -38,12 +40,6 @@ private:
         return TrinityFileManager::createDirectoryRecursiveA(
                    TrinityFileManager::parentDir(filePathUtf8));
     }
-
-    // Вставка готового файла проекта как XREF + BlockReference в целевую базу
-    // (активный документ AutoCAD). Позиция — начало координат, без поворота.
-    AcDbObjectId insertProjectToTarget(const std::string& filePathUtf8,
-                                       const std::string& neuronCode,
-                                       AcDbDatabase* targetDb);
 
 public:
     TrinityBuildEngine(const std::string& basePath) : m_files(basePath) {}
