@@ -174,14 +174,23 @@ g_timerId = 0;
 3. Обработчик `WM_TRINITY_TICK` (подклассирование окна) выполняется на главном
    потоке AutoCAD, где:
    - состояние lock mode определяется через системную переменную `LOCKMODE`
-     (`acedGetVar`, API, доступный во всех поддерживаемых версиях ObjectARX);
+     прямым getter'ом `acrtGetShortVariable()` (объявлён в acedads.h, есть во
+     всех поддерживаемых версиях ObjectARX). Буфер `resbuf` + `acedGetVar()`
+     не используются: именно они давали C2039 `"next": не является членом
+     "resbuf"` — при неполном (forward-declared) виде `resbuf` в единице
+     перевода ни `restype/resval`, ни `next` недоступны, а геттер не требует
+     обращения к полям вообще;
    - если document lock mode включён (`LOCKMODE != 0`) — активный документ
      залочивается на запись RAII-обёрткой `TrinityDocLock`
      (`acDocManager->lockDocument()` / гарантированный `unlockDocument()`
      в деструкторе);
    - если lock mode выключен (`LOCKMODE == 0`, явный `lockDocument()` в этом
-     режиме возвращает ошибку) — тик пропускается, пока в активном документе
-     выполняется команда (`AcApDocument::isCommandActive()`);
+     режиме возвращает ошибку) — тик пропускается, пока целевой документ
+     залочен на запись другим контекстом
+     (`AcApDocument::documentLockStatus() == AcAp::kWrite`). У `AcApDocument`
+     метода `isCommandActive()` в этом релизе SDK нет (он и вызывал второй
+     C2039), а `documentLockStatus()` возвращает тот же `AcAp::DocLockMode`,
+     что передаётся в `lockDocument()`;
    - lock не получен (документ занят) — запись НЕ выполняется, ждём след. тик;
    - callback вызывается внутри SEH `__try/__except` — падение тика не уносит
      весь AutoCAD.
