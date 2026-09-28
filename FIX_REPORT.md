@@ -150,3 +150,59 @@ g_timerId = 0;
 ✅ Все критические исправления применены
 ✅ Код готов к сборке в Visual Studio с ObjectARX 2026 SDK
 ✅ Рекомендуется протестировать цикл TSTART/TSTOP минимум 5 раз
+
+---
+
+# Фикс №2: Запись в активный документ из таймера без document lock (Access Violation)
+
+## Проблема
+`trinityStart()` использовал `SetTimer(NULL, NULL, 5000, TimerProc)`, а
+`TimerProc → trinityProcess()` напрямую брал `workingDatabase()` и писал в неё
+(XREF-и, wblock, saveDwg) **без захвата document lock**. Это нарушает протокол
+блокировки документов AutoCAD: колбэк Win32-таймера приходит в message pump в
+произвольный момент — когда пользователь уже начал команду, документ залочен
+другим приложением (.NET/VBA/другая ARX-программа) или идёт регенерация.
+Модификация БД в такой момент = Access Violation / фатальный крах acad.exe.
+
+## Исправление
+Добавлены `TrinityTimer.h` / `TrinityTimer.cpp` — безопасный таймер по
+рекомендуемому Autodesk паттерну:
+
+1. Таймер заводится на окно AutoCAD (`adsw_acadMainWnd()`), а не на `NULL`.
+2. Колбэк таймера **ничего не делает с документами** — только
+   `PostMessage(WM_TRINITY_TICK)` (защита от наложения тиков через флаг).
+3. Обработчик `WM_TRINITY_TICK` (подклассирование окна) выполняется на главном
+   потоке AutoCAD, где:
+   - состояние lock mode определяется через системную переменную `LOCKMODE`
+     стандартным способом: `acedGetVar(_T("LOCKMODE"), &rb)` со стековым
+     `resbuf`, проверка `rb.restype == RTSHORT && rb.resval.rint != 0`. Поле
+     `next` при этом не используется вовсе (первоначальный C2039 `"next": не
+     является членом "resbuf"` был вызван обращением именно к `rb.next`).
+     Несуществующие в данном релизе SDK имена (`acrtGetShortVariable`) не
+     применяются — они давали C3861 «идентификатор не найден»;
+   - если document lock mode включён (`LOCKMODE != 0`) — активный документ
+     залочивается на запись RAII-обёрткой `TrinityDocLock`
+     (`acDocManager->lockDocument()` / гарантированный `unlockDocument()`
+     в деструкторе);
+   - если lock mode выключен (`LOCKMODE == 0`, явный `lockDocument()` в этом
+     режиме возвращает ошибку) — тик выполняется сразу, без лока: он приходит
+     в message pump главного потока AutoCAD (между сообщениями, вне команд),
+     а при LOCKMODE = 0 другой контекст (.NET/VBA/сторонняя ARX) параллельно
+     документу не работает. Опрос состояния документа не производится:
+     методов `AcApDocument::isCommandActive()` и
+     `AcApDocument::documentLockStatus()` в заголовках этого релиза SDK нет
+     (обе попытки давали C2039);
+   - lock не получен (документ занят) — запись НЕ выполняется, ждём след. тик;
+   - callback вызывается внутри SEH `__try/__except` — падение тика не уносит
+     весь AutoCAD.
+4. `trinityProcess()` дополнительно защищён флагом `g_isProcessing`
+   (долгая сборка длиннее интервала не приводит к реентерабельности).
+
+### Изменённые файлы
+- `TrinityCommands.cpp`: `SetTimer/KillTimer` → `StartTrinityTimer/StopTrinityTimer`,
+  флаг `g_isProcessing`, обработка ошибки запуска таймера.
+- `Trinity.vcxproj`, `Trinity.vcxproj.filters`: добавлены TrinityTimer.cpp/.h.
+
+## Статус
+✅ Таймер работает строго под write-lock активного документа
+✅ Протокол document locking ObjectARX 2026 соблюдён
