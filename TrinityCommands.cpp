@@ -152,14 +152,15 @@ void trinityRib() {
     }
 
     // Точка вставки первой планки (по умолчанию 0,0,0).
-    // acedGetPoint: NULL-указатель на resbuf — допустимый способ задать
-    // статический промпт (приводится к ADSCMDBR); asDblArray — стандартный
-    // макрос ObjectARX для доступа к данным AcGePoint3d как к double[3].
-    AcGePoint3d basePnt(0.0, 0.0, 0.0);
-    int ret = acedGetPoint(nullptr,
+    // acedGetPoint принимает ads_point (double[3]); RTKINE (Enter) —
+    // оставляем базовую точку как есть.
+    ads_point baseArr = { 0.0, 0.0, 0.0 };
+    int ret = acedGetPoint(NULL,
                            _T("\nInsertion point <0,0,0>: "),
-                           asDblArray(basePnt));
+                           baseArr);
     if (ret == RTCAN) return;   // Esc — выходим без изменений чертежа
+
+    AcGePoint3d basePnt(baseArr[0], baseArr[1], baseArr[2]);
 
     // Шаг раскладки — по фактической длине каждой планки + зазор,
     // чтобы детали не накладывались друг на друга.
@@ -199,20 +200,12 @@ void trinityRib() {
 
     if (drawn > 0) {
         // ZOOM Extents, чтобы результат был виден.
-        // Программно, без acedCommandS(): модифицируем Active Viewport
-        // текущей активной таблицы (Model Space). Вызываемся из модальной
-        // команды — документ залочен, display-операции легальны.
-        AcDbObjectId layoutId = db->activeTableLayout();
-        AcDbLayout* pLayout = nullptr;
-        if (acdbOpenObject(pLayout, layoutId, AcDb::kForWrite) == Acad::eOk && pLayout) {
-            AcDbViewportTableRecord* pVtr = nullptr;
-            if (pLayout->activeViewport(pVtr, AcDb::kForWrite) == Acad::eOk && pVtr) {
-                pVtr->setZoomedToExtents();
-                pVtr->close();
-            }
-            pLayout->close();
-        }
-        acdbUpdateEyes(db);   // обновить дисплей после изменения view table
+        // Программный доступ к view-таблице в ObjectARX 2026 лишён
+        // надёжного публичного API (activeViewportTableRecordId/getExtents
+        // в AcDbDatabase отсутствуют), а acedCommandS() — новее SDK.
+        // Самый простой и стабильный вариант: явно попросить пользователя
+        // выполнить ZOOM Extents после вывода деталей.
+        acutPrintf(_T("\n[Trinity] Result drawn. Use ZOOM -> Extents to see all ribs.\n"));
     }
 
     acutPrintf(_T("\n[Trinity] TRIB done: drawn=%d, skipped=%d\n"), drawn, skipped);
