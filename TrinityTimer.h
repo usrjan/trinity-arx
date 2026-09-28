@@ -18,8 +18,10 @@
 //   3. Обработчик WM_TRINITY_TICK выполняется на главном потоке AutoCAD,
 //      где безопасно:
 //        а) определить режим блокировки через системную переменную LOCKMODE
-//           (acedGetVar) и, если lock mode выключен, пропустить тик пока в
-//           документе активна команда (AcApDocument::isCommandActive());
+//           (acrtGetShortVariable — прямой getter для INT16-переменных, без
+//           resbuf) и, если lock mode выключен, пропустить тик пока целевой
+//           документ залочен на запись другим контекстом
+//           (AcApDocument::documentLockStatus() == AcAp::kWrite);
 //        б) захватить write-lock целевого документа через
 //           AcEditorReactor::lockDocument() с обязательным
 //           unlockDocument() в деструкторе RAII-обёртки;

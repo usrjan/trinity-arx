@@ -98,19 +98,20 @@ void trnDispatchTick()
     // имена и указывали ошибки C2039/C2065.
     //
     // Единственный легальный способ узнать режим: системная переменная
-    // LOCKMODE (INT16). Читаем её буфером resbuf, который выделяет сам
-    // вызывающий код: acedGetVar(const ACHAR* symName, resbuf* result)
-    // возвращает Acad::eOk и заполняет переданный буфер. Освобождать его
-    // acutRelRb() НЕ нужно — именно попытка трактовать возврат как
-    // «resbuf*, выделенный внутри» и присвоить int указателю давала C2440.
+    // LOCKMODE (INT16), читаемая через acrtGetShortVariable(). Это прямой
+    // типобезопасный геттер из acedads.h — в отличие от acedGetVar() он не
+    // требует буфера resbuf вообще, что и снимает ошибку C2039 ("next" не
+    // является членом "resbuf"): поле rb.next есть только у полного
+    // объявления struct resbuf из adsdef.h; если же единицей перевода
+    // resbuf виден лишь как неполный (forward-declared) тип, любое
+    // обращение к его полям — в том числе к rb.next — компилироваться
+    // отказывается. Здесь мы сознательно не трогаем ни restype/resval, ни
+    // next: достаточно значения, которое вернул геттер.
     bool lockModeEnabled = false;
     {
-        resbuf rbLock{};
-        rbLock.restype = RTSHORT;
-        rbLock.resval.rint = 0;
-        rbLock.next = nullptr;
-        if (acedGetVar(_T("LOCKMODE"), &rbLock) == Acad::eOk &&
-            rbLock.resval.rint != 0) {
+        short lockModeValue = 0;
+        if (acrtGetShortVariable(_T("LOCKMODE"), &lockModeValue) == Acad::eOk &&
+            lockModeValue != 0) {
             lockModeEnabled = true;
         }
     }
@@ -119,11 +120,14 @@ void trnDispatchTick()
         // Lock mode ОТКЛЮЧЁН (LOCKMODE = 0): явный lockDocument() в этом
         // режиме вернёт Acad::eLockModeOff, поэтому писать в документ можно
         // только когда он простаивает. Публичного API состояния документа
-        // в данном релизе заголовков нет — доступная и достаточная
-        // проверка: прямо сейчас в текущем документе не выполняется
-        // редакторская команда. Если команда активна — пропускаем тик
-        // и ждём следующий.
-        if (pDoc->isCommandActive()) {
+        // в данном релизе заголовков нет — и AcApDocument::isCommandActive()
+        // тоже не существует (отсюда C2039 на строке 126). Единственная
+        // легальная проверка из acdocman.h:AcApDocument::documentLockStatus(),
+        // возвращающая AcAp::DocLockMode — тот же самый enum, что мы передаём
+        // в lockDocument(). Если документ залочен на запись кем-то другим
+        // (редакторская команда, .NET-приложение, другой ARX) — пропускаем
+        // тик и ждём следующий; kRead/kNone означают, что пишем безопасно.
+        if (pDoc->documentLockStatus() == AcAp::kWrite) {
             return;
         }
         // Доступ к документу сериализован: наш тик обработан на главном
