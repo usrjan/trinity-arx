@@ -537,6 +537,109 @@ int TrinityBuildEngine::processAllProjects(AcDbDatabase* targetDb) {
 }
 
 // ============================================================
+// КОМАНДА TRIB (разработка): НАРИСОВАТЬ ВСЕ ПЛАНКИ В ЧЕРТЕЖЕ
+// ============================================================
+// Читает из базы все детали с category='rib' и рисует их солидами
+// в Model Space текущей базы, раскладывая в ряд с отступом.
+// Геометрия каждой планки полностью динамическая — размеры и толщина
+// берутся из свойств нейрона (код D.S.3.ширина.высота.толщина + JSON).
+// ============================================================
+int TrinityBuildEngine::drawAllRibs(AcDbDatabase* targetDb) {
+    if (!targetDb) return 0;
+
+    auto ribs = m_core.loadRibs();
+    if (ribs.empty()) {
+        acutPrintf(_T("\n[TRIB] No details with category='rib' found in database.\n"));
+        return 0;
+    }
+
+    // Служебные слои
+    TrinityLayerManager::ensureBoltLayer(targetDb);
+    TrinityAttributeBuilder::ensureTagLayer(targetDb);
+
+    AcDbBlockTable* pBt = nullptr;
+    if (targetDb->getSymbolTable(pBt, AcDb::kForRead) != Acad::eOk || !pBt) {
+        acutPrintf(_T("\n[TRIB] Cannot open block table.\n"));
+        return 0;
+    }
+
+    AcDbBlockTableRecord* pMs = nullptr;
+    Acad::ErrorStatus esMs = pBt->getAt(ACDB_MODEL_SPACE, pMs, AcDb::kForWrite);
+    pBt->close();
+    if (esMs != Acad::eOk || !pMs) {
+        acutPrintf(_T("\n[TRIB] Cannot open model space.\n"));
+        if (pMs) pMs->close();
+        return 0;
+    }
+
+    int drawn = 0;
+    double cursorX = 0.0;          // следующая планка ставится вправо
+    const double GAP = 50.0;       // зазор между планками при раскладке
+
+    for (const auto& rib : ribs) {
+        // Строим геометрию по свойствам нейрона
+        AcDb3dSolid* solid = TrinityGeometryBuilder::build(rib);
+        if (!solid) {
+            wchar_t* wCode = utf2uni(rib.code.c_str());
+            acutPrintf(_T("\n[TRIB] Skip %s: geometry build failed\n"), wCode);
+            free(wCode);
+            continue;
+        }
+
+        // Слой материала
+        TrinityLayerManager::createOrGetLayer(targetDb, rib.material);
+        std::string layer = TrinityLayerManager::layerName(rib.material);
+        wchar_t layerW[256];
+        MultiByteToWideChar(CP_UTF8, 0, layer.c_str(), -1, layerW, 256);
+        solid->setLayer(layerW);
+
+        // Позиционируем в ряд вдоль оси X
+        AcGeMatrix3d mat;
+        mat.setToIdentity();
+        mat.setTranslation(AcGeVector3d(cursorX, 0.0, 0.0));
+        solid->transformBy(mat);
+
+        AcDbObjectId solidId;
+        if (pMs->appendAcDbEntity(solidId, solid) != Acad::eOk) {
+            solid->close();
+            delete solid;   // append не состоялся — освобождаем напрямую
+            continue;
+        }
+        solid->close();
+
+        // Маркеры болтов (как у планок в сборках), со сдвигом на cursorX.
+        // Временная подмена ширины невозможна (болты считаются от width),
+        // поэтому рисуем их через локальный массив и сами сдвигаем circles.
+        AcDbObjectIdArray boltIds;
+        TrinityGeometryBuilder::drawBoltMarkers(rib, pMs, boltIds);
+        if (cursorX != 0.0) {
+            AcGeMatrix3d shift;
+            shift.setToIdentity();
+            shift.setTranslation(AcGeVector3d(cursorX, 0.0, 0.0));
+            for (int i = 0; i < boltIds.length(); i++) {
+                AcDbEntity* pEnt = nullptr;
+                if (acdbOpenAcDbEntity(pEnt, boltIds[i], AcDb::kForWrite) == Acad::eOk && pEnt) {
+                    pEnt->transformBy(shift);
+                    pEnt->close();
+                }
+            }
+        }
+
+        cursorX += rib.width + GAP;
+        drawn++;
+
+        wchar_t* wCode = utf2uni(rib.code.c_str());
+        acutPrintf(_T("\n[TRIB] Drawn: %s  W=%d H=%.1f T=%d\n"),
+                   wCode, rib.width, rib.ribHeight, rib.thickness);
+        free(wCode);
+    }
+
+    pMs->close();
+
+    return drawn;
+}
+
+// ============================================================
 // УДАЛЕНИЕ ФАЙЛОВ ПРОЕКТА (рекурсивно по детям)
 // ============================================================
 void TrinityBuildEngine::deleteProjectFiles(const std::string& code) {

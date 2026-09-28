@@ -121,3 +121,58 @@ void trinityProcess() {
         g_isProcessing = false;
     }
 }
+
+// ============================================
+// TRIB — разработка: нарисовать все планки (category='rib')
+// ============================================
+// Команда для этапа разработки: берёт подключение к базе из trinity.ini,
+// читает все детали с category='rib' и рисует их прямо в Model Space
+// текущего открытого чертежа (в ряд, с зазором). Размеры и толщина
+// каждой планки — динамические, из свойств нейрона.
+void trinityTrib() {
+    // Если движок с таймером уже запущен — переиспользуем его соединение
+    bool ownEngine = false;
+    TrinityBuildEngine* engine = g_engine;
+
+    if (!engine) {
+        TrinityDbConfig cfg;
+        if (!loadTrinityConfig(cfg)) {
+            acutPrintf(_T("\n[TRIB] Config load failed (trinity.ini). Command aborted.\n"));
+            return;
+        }
+        engine = new TrinityBuildEngine(cfg.basePath);
+        if (!engine->init(cfg.host.c_str(), cfg.user.c_str(),
+                          cfg.pass.c_str(), cfg.db.c_str())) {
+            acutPrintf(_T("\n[TRIB] Failed to connect to database.\n"));
+            delete engine;
+            return;
+        }
+        ownEngine = true;
+    }
+
+    AcDbDocument* pDoc = acDocManager->curDocument();
+    if (!pDoc || pDoc->isReadOnly()) {
+        acutPrintf(_T("\n[TRIB] No writable document is open.\n"));
+        if (ownEngine) { engine->shutdown(); delete engine; }
+        return;
+    }
+
+    AcDbDatabase* db = acdbHostApplicationServices()->workingDatabase();
+
+    // Трибуны не трогаем во время тика таймера — ждём, пока он закончит
+    if (g_isProcessing) {
+        acutPrintf(_T("\n[TRIB] Timer tick in progress, try again in a few seconds.\n"));
+        if (ownEngine) { engine->shutdown(); delete engine; }
+        return;
+    }
+
+    int drawn = engine->drawAllRibs(db);
+
+    acutPrintf(_T("\n[TRIB] Done. Ribs drawn: %d\n"), drawn);
+    if (drawn > 0) acedUpdateDisplay();
+
+    if (ownEngine) {
+        engine->shutdown();
+        delete engine;
+    }
+}

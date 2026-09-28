@@ -14,7 +14,13 @@ void initApp() {
         _T("TSTOP"), _T("TSTOP"),
         ACRX_CMD_MODAL, trinityStop);
 
-    acutPrintf(_T("\n[Trinity] Plugin loaded. TSTART / TSTOP\n"));
+    // TRIB — команда этапа разработки: нарисовать в текущем чертеже
+    // все планки из базы (category='rib')
+    acedRegCmds->addCommand(_T("TRINITY_COMMANDS"),
+        _T("TRIB"), _T("TRIB"),
+        ACRX_CMD_MODAL, trinityTrib);
+
+    acutPrintf(_T("\n[Trinity] Plugin loaded. TSTART / TSTOP / TRIB\n"));
 }
 
 // ============================================

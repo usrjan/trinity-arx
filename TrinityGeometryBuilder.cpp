@@ -44,17 +44,36 @@ AcDb3dSolid* TrinityGeometryBuilder::buildSidewall(const TrinityNeuron& d) {
 }
 
 // ============================================
-// ПЛАНКА (со гнёздами)
+// ПЛАНКА (со гнёздами) — динамическая деталь
 // ============================================
+// Все размеры берутся из свойств нейрона:
+//   W            = d.width      (длина планки, из кода или JSON "width")
+//   H (ribHeight)= d.ribHeight  (высота/ширина планки в плане;
+//                                 по умолчанию берётся из "height" нейрона
+//                                 (125 для эталонных D.S.3.*.125.*),
+//                                 переопределяется JSON "rib.height")
+//   T            = d.thickness  (толщина, из кода или JSON "thickness")
+//   SLOT_HALF    = d.ribSlotHalf    (полуширина гнезда)
+//   SLOT_DEPTH   = d.ribSlotDepth   (глубина прямого участка паза)
+//   HOLE_OFFSET  = d.ribHoleOffset  (отступ дуги гнезда от края)
 AcDb3dSolid* TrinityGeometryBuilder::buildRib(const TrinityNeuron& d) {
     double W = d.width;
-    double H = 125.0;
+    double H = d.ribHeight;
     double T = d.thickness;
     double centerY = H / 2.0;
 
-    const double SLOT_HALF = 4.0;
-    const double SLOT_DEPTH = 23.54316771;
-    const double HOLE_OFFSET = 53.0;
+    const double SLOT_HALF = d.ribSlotHalf;
+    const double SLOT_DEPTH = d.ribSlotDepth;
+    const double HOLE_OFFSET = d.ribHoleOffset;
+
+    // sanity-проверка параметров: иначе контур самопересечётся
+    if (W <= 0 || H <= 0 || T <= 0 ||
+        HOLE_OFFSET * 2.0 >= W || SLOT_DEPTH < HOLE_OFFSET ||
+        SLOT_HALF * 2.0 >= H) {
+        acutPrintf(_T("\n[GeometryBuilder] buildRib: invalid params W=%.1f H=%.1f T=%.1f slotHalf=%.1f slotDepth=%.1f holeOffset=%.1f\n"),
+                   W, H, T, SLOT_HALF, SLOT_DEPTH, HOLE_OFFSET);
+        return nullptr;
+    }
 
     // --------------------------------------------------
     // ЛЕВОЕ ОТВЕРСТИЕ (X=0, дуга поперёк прорези)
@@ -112,16 +131,16 @@ AcDb3dSolid* TrinityGeometryBuilder::buildRib(const TrinityNeuron& d) {
     AcDbPolyline* pPoly = new AcDbPolyline(12);
 
     pPoly->addVertexAt(0, AcGePoint2d(0.0, W), 0, 0, 0);
-    pPoly->addVertexAt(1, AcGePoint2d(centerY - 4.0, W), 0, 0, 0);
+    pPoly->addVertexAt(1, AcGePoint2d(centerY - SLOT_HALF, W), 0, 0, 0);
     pPoly->addVertexAt(2, pt11, tan((end1Angle - new1Start) / 4.0), 0, 0);
     pPoly->addVertexAt(3, pt12, 0, 0, 0);
-    pPoly->addVertexAt(4, AcGePoint2d(centerY + 4.0, W), 0, 0, 0);
+    pPoly->addVertexAt(4, AcGePoint2d(centerY + SLOT_HALF, W), 0, 0, 0);
     pPoly->addVertexAt(5, AcGePoint2d(H, W), 0, 0, 0);
     pPoly->addVertexAt(6, AcGePoint2d(H, 0.0), 0, 0, 0);
-    pPoly->addVertexAt(7, AcGePoint2d(centerY + 4.0, 0.0), 0, 0, 0);
+    pPoly->addVertexAt(7, AcGePoint2d(centerY + SLOT_HALF, 0.0), 0, 0, 0);
     pPoly->addVertexAt(8, pt21, tan((end2Angle - new2Start) / 4.0), 0, 0);
     pPoly->addVertexAt(9, pt22, 0, 0, 0);
-    pPoly->addVertexAt(10, AcGePoint2d(centerY - 4.0, 0.0), 0, 0, 0);
+    pPoly->addVertexAt(10, AcGePoint2d(centerY - SLOT_HALF, 0.0), 0, 0, 0);
     pPoly->addVertexAt(11, AcGePoint2d(0.0, 0.0), 0, 0, 0);
 
     if (!pPoly->isClosed()) pPoly->setClosed(true);

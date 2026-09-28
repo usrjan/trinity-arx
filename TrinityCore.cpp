@@ -189,6 +189,44 @@ std::vector<TrinityNeuron> TrinityCore::loadPendingProjects() {
 }
 
 // ============================================
+// ЗАГРУЗКА ВСЕХ ПЛАНОК (category = 'rib')
+// ============================================
+// Используется командой TRIB на этапе разработки: рисует в текущем
+// чертеже все планки из базы. Свойства берутся из JSON нейрона
+// (width/height/thickness из кода + секция "rib" для тонкой настройки).
+std::vector<TrinityNeuron> TrinityCore::loadRibs() {
+    std::vector<TrinityNeuron> ribs;
+    if (!m_connected) return ribs;
+
+    const char* query =
+        "SELECT id, "
+        "  JSON_UNQUOTE(JSON_EXTRACT(data, '$.code')), "
+        "  type, "
+        "  COALESCE(JSON_UNQUOTE(JSON_EXTRACT(data, '$.category')), ''), "
+        "  COALESCE(JSON_UNQUOTE(JSON_EXTRACT(data, '$.material')), 'PLYWOOD-FSF'), "
+        "  COALESCE(JSON_UNQUOTE(JSON_EXTRACT(data, '$.status')), ''), "
+        "  data "
+        "FROM neuron "
+        "WHERE type = 'detail' "
+        "  AND JSON_UNQUOTE(JSON_EXTRACT(data, '$.category')) = 'rib' "
+        "  AND is_deleted = 0 "
+        "ORDER BY CAST(JSON_UNQUOTE(JSON_EXTRACT(data, '$.sort')) AS UNSIGNED), id";
+
+    if (mysql_query(m_mysql, query) != 0) return ribs;
+
+    MYSQL_RES* result = mysql_store_result(m_mysql);
+    if (!result) return ribs;
+
+    MYSQL_ROW row;
+    while ((row = mysql_fetch_row(result))) {
+        ribs.push_back(parseNeuronRow(row));
+    }
+
+    mysql_free_result(result);
+    return ribs;
+}
+
+// ============================================
 // ОТМЕТКА "DONE"
 // ============================================
 bool TrinityCore::markNeuronDone(int id) {
@@ -220,7 +258,84 @@ TrinityNeuron TrinityCore::parseNeuronRow(MYSQL_ROW row) {
                  &n.processCode, &n.width, &n.height, &n.thickness);
     }
 
+    // Динамические свойства (например, для планки — секция "rib" в JSON)
+    applyRibProperties(n);
+
     return n;
+}
+
+// ============================================
+// УПРОЩЁННЫЙ JSON-ПАРСЕР: число по ключу
+// ============================================
+// Ищет "key" : <число> в пределах json-строки. Поддерживает вложенные
+// объекты за счёт поиска ключа как строки (в т.ч. внутри "rib": { ... }).
+bool TrinityCore::jsonGetDouble(const std::string& json, const std::string& key, double& out) {
+    const std::string pat = "\"" + key + "\"";
+    size_t p = json.find(pat);
+    while (p != std::string::npos) {
+        size_t colon = json.find(':', p + pat.size());
+        if (colon == std::string::npos) return false;
+        size_t v = colon + 1;
+        while (v < json.size() && (json[v] == ' ' || json[v] == '\t' ||
+                                   json[v] == '\n' || json[v] == '\r')) v++;
+        if (v < json.size()) {
+            char* endp = nullptr;
+            double d = strtod(json.c_str() + v, &endp);
+            if (endp != json.c_str() + v) {   // удалось прочитать число
+                out = d;
+                return true;
+            }
+        }
+        p = json.find(pat, p + pat.size());
+    }
+    return false;
+}
+
+// ============================================
+// ПРИМЕНЕНИЕ СВОЙСТВ ПЛАНКИ ИЗ JSON НЕЙРОНА
+// ============================================
+// Пример data:
+//   {"code":"D.S.3.600.150.12","category":"rib",
+//    "rib":{"height":150,"slotHalf":5,"slotDepth":25,"holeOffset":55}}
+// width/height/thickness по умолчанию берутся из кода детали;
+// поля секции "rib" позволяют переопределить их и геометрию гнёзд.
+void TrinityCore::applyRibProperties(TrinityNeuron& n) {
+    if (n.category != "rib" || n.jsonData.empty()) return;
+
+    double v = 0;
+    // Габариты: JSON имеет приоритет над кодом (если заданы явно)
+    if (jsonGetDouble(n.jsonData, "width", v) && v > 0)     n.width = (int)v;
+    if (jsonGetDouble(n.jsonData, "height", v) && v > 0)    n.height = (int)v;
+    if (jsonGetDouble(n.jsonData, "thickness", v) && v > 0) n.thickness = (int)v;
+
+    // Секция rib.* — если её нет, остаются значения по умолчанию
+    // (ищем только внутри объекта "rib": {...}, чтобы не схватить
+    // одноимённые ключи верхнего уровня).
+    std::string ribJson;
+    size_t ribKey = n.jsonData.find("\"rib\"");
+    if (ribKey != std::string::npos) {
+        size_t braceOpen = n.jsonData.find('{', ribKey);
+        if (braceOpen != std::string::npos) {
+            int depth = 0;
+            size_t i = braceOpen;
+            for (; i < n.jsonData.size(); i++) {
+                if (n.jsonData[i] == '{') depth++;
+                else if (n.jsonData[i] == '}') { depth--; if (depth == 0) { i++; break; } }
+            }
+            ribJson = n.jsonData.substr(braceOpen, i - braceOpen);
+        }
+    }
+
+    if (!ribJson.empty()) {
+        if (jsonGetDouble(ribJson, "height", v) && v > 0)      n.ribHeight = v;
+        if (jsonGetDouble(ribJson, "slotHalf", v) && v > 0)    n.ribSlotHalf = v;
+        if (jsonGetDouble(ribJson, "slotDepth", v) && v > 0)   n.ribSlotDepth = v;
+        if (jsonGetDouble(ribJson, "holeOffset", v) && v > 0)  n.ribHoleOffset = v;
+    }
+
+    // По умолчанию высота планки = height нейрона (например 125 для
+    // D.S.3.425.125.10). Явный rib.height имеет приоритет.
+    if (n.ribHeight <= 0) n.ribHeight = n.height;
 }
 
 // ============================================

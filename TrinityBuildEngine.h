@@ -46,4 +46,9 @@ public:
 
     // Главный метод: обработать все pending-проекты
     int processAllProjects(AcDbDatabase* targetDb);
+
+    // Команда TRIB (этап разработки): нарисовать в текущем открытом
+    // чертеже ВСЕ планки из базы с category='rib'.
+    // Возвращает количество нарисованных планок.
+    int drawAllRibs(AcDbDatabase* targetDb);
 };
