@@ -35,6 +35,14 @@ private:
     // Рекурсивное удаление файлов проекта и всех его детей
     void deleteProjectFiles(const std::string& code);
 
+    // Гарантирует существование родительской директории файла (UTF-8 путь).
+    // Нужен перед saveDwg: промежуточные папки могут отсутствовать,
+    // а путь может содержать кириллицу (создаётся через _wmkdir).
+    bool ensureDirectoryForFile(const std::string& filePathUtf8) {
+        return TrinityFileManager::createDirectoryRecursiveA(
+                   TrinityFileManager::parentDir(filePathUtf8));
+    }
+
 public:
     TrinityBuildEngine(const std::string& basePath) : m_files(basePath) {}
 

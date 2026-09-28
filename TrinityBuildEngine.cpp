@@ -27,7 +27,7 @@ AcDbObjectId TrinityBuildEngine::ensureExists(const std::string& code,
     // Защита от бесконечной рекурсии
     if (depth > 20) {
         wchar_t* wCode = utf2uni(code.c_str());
-        acutPrintf(_T("\n[BuildEngine] MAX DEPTH reached for %s\n"), wCode);
+        acutPrintf(_T("\n[BuildEngine] MAX DEPTH reached for %ls\n"), wCode);
         free(wCode);
         return AcDbObjectId::kNull;
     }
@@ -36,7 +36,7 @@ AcDbObjectId TrinityBuildEngine::ensureExists(const std::string& code,
     TrinityNeuron* pNeuron = m_core.loadNeuronByCode(code);
     if (!pNeuron) {
         wchar_t* wCode = utf2uni(code.c_str());
-        acutPrintf(_T("\n[BuildEngine] Neuron not found: %s\n"), wCode);
+        acutPrintf(_T("\n[BuildEngine] Neuron not found: %ls\n"), wCode);
         free(wCode);
         return AcDbObjectId::kNull;
     }
@@ -59,7 +59,7 @@ AcDbObjectId TrinityBuildEngine::ensureExists(const std::string& code,
     // 3. Если файл существует — вставляем XREF
     if (m_files.fileExists(neuron.code, subdir)) {
         wchar_t* wCode = utf2uni(neuron.code.c_str());
-        acutPrintf(_T("\n[BuildEngine] EXISTS: %s (depth=%d)\n"), wCode, depth);
+        acutPrintf(_T("\n[BuildEngine] EXISTS: %ls (depth=%d)\n"), wCode, depth);
         free(wCode);
 
         return m_files.attachXref(filePath, neuron.code, position, rotation, targetDb);
@@ -68,7 +68,7 @@ AcDbObjectId TrinityBuildEngine::ensureExists(const std::string& code,
     // 4. Файла нет — строим
     wchar_t* wCode = utf2uni(neuron.code.c_str());
     wchar_t* wType = utf2uni(neuron.type.c_str());
-    acutPrintf(_T("\n[BuildEngine] BUILDING: %s (type=%s, depth=%d)\n"),
+    acutPrintf(_T("\n[BuildEngine] BUILDING: %ls (type=%ls, depth=%d)\n"),
                wCode, wType, depth);
     free(wCode);
     free(wType);
@@ -85,7 +85,8 @@ AcDbObjectId TrinityBuildEngine::ensureExists(const std::string& code,
         return AcDbObjectId::kNull;
     }
 
-    // 5. Сохраняем
+    // 5. Сохраняем (путь может содержать кириллицу и отсутствующие промежуточные папки)
+    ensureDirectoryForFile(filePath);
     m_files.saveDwg(cleanDb, filePath);
     delete cleanDb;
 
@@ -469,7 +470,7 @@ std::string TrinityBuildEngine::ensureFileExists(const std::string& code, int de
     // Защита от бесконечной рекурсии
     if (depth > 20) {
         wchar_t* wCode = utf2uni(code.c_str());
-        acutPrintf(_T("\n[BuildEngine] MAX DEPTH for %s\n"), wCode);
+        acutPrintf(_T("\n[BuildEngine] MAX DEPTH for %ls\n"), wCode);
         free(wCode);
         return "";
     }
@@ -507,7 +508,8 @@ std::string TrinityBuildEngine::ensureFileExists(const std::string& code, int de
 
     if (!db) return "";
 
-    // Сохраняем
+    // Сохраняем (промежуточные папки создаются рекурсивно, путь — Unicode-безопасно)
+    ensureDirectoryForFile(filePath);
     m_files.saveDwg(db, filePath);
     delete db;
     Sleep(200);
@@ -537,7 +539,7 @@ int TrinityBuildEngine::processAllProjects(AcDbDatabase* targetDb) {
 
         if (actualPath.empty()) {
             wchar_t* wCode = utf2uni(proj.code.c_str());
-            acutPrintf(_T("\n[BuildEngine] Failed to create project: %s\n"), wCode);
+            acutPrintf(_T("\n[BuildEngine] Failed to create project: %ls\n"), wCode);
             free(wCode);
             continue;
         }
@@ -546,7 +548,7 @@ int TrinityBuildEngine::processAllProjects(AcDbDatabase* targetDb) {
         m_core.markNeuronDone(proj.id);
 
         wchar_t* wCode = utf2uni(proj.code.c_str());
-        acutPrintf(_T("\n[BuildEngine] Project done: %s\n"), wCode);
+        acutPrintf(_T("\n[BuildEngine] Project done: %ls\n"), wCode);
         free(wCode);
     }
 
@@ -583,7 +585,7 @@ void TrinityBuildEngine::deleteProjectFiles(const std::string& code) {
         _wunlink(pathW);
         
         wchar_t* wCode = utf2uni(neuron.code.c_str());
-        acutPrintf(_T("\n[BuildEngine] Deleted file: %s.dwg\n"), wCode);
+        acutPrintf(_T("\n[BuildEngine] Deleted file: %ls.dwg\n"), wCode);
         free(wCode);
     }
 

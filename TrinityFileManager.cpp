@@ -4,16 +4,95 @@
 #include <direct.h>
 #include <io.h>
 
+// Утилита: преобразование UTF-8 std::string -> std::wstring
+static std::wstring utf8ToWideLocal(const std::string& s) {
+    if (s.empty()) return std::wstring();
+    int need = MultiByteToWideChar(CP_UTF8, 0, s.c_str(), -1, nullptr, 0);
+    if (need <= 0) return std::wstring();
+    std::wstring w(static_cast<size_t>(need), L'\0');
+    MultiByteToWideChar(CP_UTF8, 0, s.c_str(), -1, &w[0], need);
+    w.resize(static_cast<size_t>(need) - 1); // убрать терминальный ноль
+    return w;
+}
+
+// Рекурсивное создание директории по широкому пути.
+// Идём по разделителям ('\' и '/') и создаём каждую промежуточную папку.
+// _wmkdir возвращает 0 при успехе; errno==EEXIST означает «папка уже есть» —
+// это не ошибка. Остальные сбои логируются и пробрасываются как false.
+bool TrinityFileManager::createDirectoryRecursiveW(const wchar_t* wpath) {
+    if (!wpath || !*wpath) return false;
+
+    std::wstring path(wpath);
+    for (size_t i = 0; i < path.size(); ++i)
+        if (path[i] == L'/') path[i] = L'\\';
+
+    size_t start = 0;
+    bool isUnc = false;
+    if (path.size() >= 2 && path[0] == L'\\' && path[1] == L'\\') {
+        // UNC-путь \\server\share\...: сервер/шару не создаём
+        size_t p1 = path.find(L'\\', 2);
+        if (p1 == std::wstring::npos) return true;      // только сервер — ничего создавать не нужно
+        size_t p2 = path.find(L'\\', p1 + 1);
+        if (p2 == std::wstring::npos) return true;      // сервер+шара — тоже существующая реальность
+        start = p2 + 1;
+        isUnc = true;
+    } else if (path.size() >= 2 && path[1] == L':') {
+        start = 2; // диск C:\...
+    }
+
+    std::wstring cur;
+    size_t i = 0;
+    while (i < path.size()) {
+        size_t sep = path.find(L'\\', i);
+        if (sep == std::wstring::npos) sep = path.size();
+        if (sep > i) {
+            cur = path.substr(0, sep);
+            // Не пытаемся создать корень ("C:\" или "\\srv\sh\")
+            const size_t rootLen = isUnc ? start : (start == 2 ? 3 : 0);
+            if (cur.size() > rootLen) {
+                if (_waccess(cur.c_str(), 0) != 0) {
+                    if (_wmkdir(cur.c_str()) != 0 && errno != EEXIST) {
+                        acutPrintf(_T("\n[FileManager] mkdir failed: %ls (errno=%d)\n"),
+                                   cur.c_str(), errno);
+                        return false;
+                    }
+                }
+            }
+        }
+        i = sep + 1;
+    }
+    return true;
+}
+
+bool TrinityFileManager::createDirectoryRecursiveA(const std::string& pathUtf8) {
+    std::wstring w = utf8ToWideLocal(pathUtf8);
+    if (w.empty()) {
+        acutPrintf(_T("\n[FileManager] Bad path encoding: %hs\n"), pathUtf8.c_str());
+        return false;
+    }
+    return createDirectoryRecursiveW(w.c_str());
+}
+
+// Извлекает родительную директорию из полного пути к файлу (UTF-8).
+std::string TrinityFileManager::parentDir(const std::string& filePath) {
+    size_t pos = filePath.find_last_of("\\/");
+    if (pos == std::string::npos) return std::string();
+    return filePath.substr(0, pos);
+}
+
 TrinityFileManager::TrinityFileManager(const std::string& basePath)
     : m_basePath(basePath) {
-    _mkdir((m_basePath + "\\details").c_str());
-    _mkdir((m_basePath + "\\assemblies").c_str());
-    _mkdir((m_basePath + "\\projects").c_str());
+    // Рекурсивно: если m_basePath ещё нет вместе с промежуточными папками —
+    // они будут созданы. Unicode-функции: кириллические пути сохраняются.
+    createDirectoryRecursiveA(m_basePath + "\\details");
+    createDirectoryRecursiveA(m_basePath + "\\assemblies");
+    createDirectoryRecursiveA(m_basePath + "\\projects");
 }
 
 bool TrinityFileManager::fileExists(const std::string& code, const std::string& subdir) const {
     std::string path = getFilePath(code, subdir);
-    return _access(path.c_str(), 0) == 0;
+    std::wstring w = utf8ToWideLocal(path);
+    return !w.empty() && _waccess(w.c_str(), 0) == 0;
 }
 
 std::string TrinityFileManager::getFilePath(const std::string& code, const std::string& subdir) const {
@@ -30,10 +109,10 @@ bool TrinityFileManager::saveDwg(AcDbDatabase* db, const std::string& path) {
 
     Acad::ErrorStatus es = db->saveAs(pathW);
     if (es == Acad::eOk) {
-        //acutPrintf(_T("\n[FileManager] Saved: %s\n"), pathW);
+        //acutPrintf(_T("\n[FileManager] Saved: %ls\n"), pathW);
         return true;
     }
-    acutPrintf(_T("\n[FileManager] Save failed: %s (error %d)\n"), pathW, es);
+    acutPrintf(_T("\n[FileManager] Save failed: %ls (error %d)\n"), pathW, es);
     return false;
 }
 
@@ -49,7 +128,7 @@ AcDbObjectId TrinityFileManager::attachXref(
     MultiByteToWideChar(CP_UTF8, 0, name.c_str(), -1, nameW, 256);
 
     if (_waccess(pathW, 0) != 0) {
-        acutPrintf(_T("\n[FileManager] File not found: %s\n"), pathW);
+        acutPrintf(_T("\n[FileManager] File not found: %ls\n"), pathW);
         return AcDbObjectId::kNull;
     }
 
@@ -147,7 +226,7 @@ AcDbObjectId TrinityFileManager::attachXref(
     }
 
     if (blockId == AcDbObjectId::kNull) {
-        acutPrintf(_T("\n[FileManager] Block not found: %s\n"), nameW);
+        acutPrintf(_T("\n[FileManager] Block not found: %ls\n"), nameW);
         return AcDbObjectId::kNull;
     }
 
