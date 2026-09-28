@@ -1,19 +1,9 @@
 // TrinityFileManager.cpp
 #include "StdAfx.h"
 #include "TrinityFileManager.h"
-#include <direct.h>
-#include <io.h>
-
-// Утилита: преобразование UTF-8 std::string -> std::wstring
-static std::wstring utf8ToWideLocal(const std::string& s) {
-    if (s.empty()) return std::wstring();
-    int need = MultiByteToWideChar(CP_UTF8, 0, s.c_str(), -1, nullptr, 0);
-    if (need <= 0) return std::wstring();
-    std::wstring w(static_cast<size_t>(need), L'\0');
-    MultiByteToWideChar(CP_UTF8, 0, s.c_str(), -1, &w[0], need);
-    w.resize(static_cast<size_t>(need) - 1); // убрать терминальный ноль
-    return w;
-}
+// Примечание: <io.h>/<direct.h> уже включены через StdAfx.h — дубли убраны.
+// Конвертация UTF-8 -> std::wstring берётся из общего хелпера utf8ToWide()
+// (StdAfx.h/.cpp) — локальная копия утилиты удалена как дубль.
 
 // Рекурсивное создание директории по широкому пути.
 // Идём по разделителям ('\' и '/') и создаём каждую промежуточную папку.
@@ -65,7 +55,7 @@ bool TrinityFileManager::createDirectoryRecursiveW(const wchar_t* wpath) {
 }
 
 bool TrinityFileManager::createDirectoryRecursiveA(const std::string& pathUtf8) {
-    std::wstring w = utf8ToWideLocal(pathUtf8);
+    std::wstring w = utf8ToWide(pathUtf8);
     if (w.empty()) {
         acutPrintf(_T("\n[FileManager] Bad path encoding: %hs\n"), pathUtf8.c_str());
         return false;
@@ -142,7 +132,7 @@ TrinityFileManager::TrinityFileManager(const std::string& basePath)
 
 bool TrinityFileManager::fileExists(const std::string& code, const std::string& subdir) const {
     std::string path = getFilePath(code, subdir);
-    std::wstring w = utf8ToWideLocal(path);
+    std::wstring w = utf8ToWide(path);
     return !w.empty() && _waccess(w.c_str(), 0) == 0;
 }
 
@@ -180,7 +170,7 @@ bool TrinityFileManager::saveDwg(AcDbDatabase* db, const std::string& path) {
     // Теперь размер вычисляется точно, конвертация проверяется на успех.
     if (!db) return false;
 
-    std::wstring w = utf8ToWideLocal(path);
+    std::wstring w = utf8ToWide(path);
     if (w.empty()) {
         acutPrintf(_T("\n[FileManager] Bad path encoding: %hs\n"), path.c_str());
         return false;
@@ -208,10 +198,10 @@ AcDbObjectId TrinityFileManager::attachXref(
     // незаписанного стекового мусора как строки давало AV внутри acad.exe.
     if (!targetDb) return AcDbObjectId::kNull;
 
-    std::wstring pathW = utf8ToWideLocal(path);
+    std::wstring pathW = utf8ToWide(path);
     // Имя блока в AutoCAD наследует правила имён файлов: запрещены
     // < > : " / \ | ? = , ; и ( ) — код нейрона из БД санитизируется.
-    std::wstring nameW = utf8ToWideLocal(sanitizeFileName(name));
+    std::wstring nameW = utf8ToWide(sanitizeFileName(name));
     if (pathW.empty() || nameW.empty()) {
         acutPrintf(_T("\n[FileManager] Bad path/name encoding: %hs\n"), path.c_str());
         return AcDbObjectId::kNull;

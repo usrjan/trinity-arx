@@ -4,8 +4,8 @@
 #include "TrinityGeometryBuilder.h"
 #include "TrinityLayerManager.h"
 #include "TrinityAttributeBuilder.h"
-#include <io.h>
 #include <cstring>   // strlen (парсинг holes)
+// Примечание: <io.h> уже включён через StdAfx.h — дубль убран.
 
 // ============================================================
 // ПРИМЕЧАНИЕ: вставка готового DWG проекта в текущий чертёж НЕ делается.
