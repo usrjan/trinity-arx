@@ -91,49 +91,34 @@ void trnDispatchTick()
     AcApDocument* pDoc = acDocManager->curDocument();
     if (!pDoc) return;
 
-    // Проверка document lock mode. В данном релизе ObjectARX (см.
-    // acdocman.h / AcApDocLockMode.h) у AcApDocManager нет метода
-    // isLockModeEnabled(), а вложенного типа AcApDocument::DocumentStatus
-    // и констант eIsIdle/kDocIdle не существует — на эти несуществующие
-    // имена и указывали ошибки C2039/C2065.
-    //
-    // Единственный легальный способ узнать режим: системная переменная
-    // LOCKMODE (INT16), читаемая через acrtGetShortVariable(). Это прямой
-    // типобезопасный геттер из acedads.h — в отличие от acedGetVar() он не
-    // требует буфера resbuf вообще, что и снимает ошибку C2039 ("next" не
-    // является членом "resbuf"): поле rb.next есть только у полного
-    // объявления struct resbuf из adsdef.h; если же единицей перевода
-    // resbuf виден лишь как неполный (forward-declared) тип, любое
-    // обращение к его полям — в том числе к rb.next — компилироваться
-    // отказывается. Здесь мы сознательно не трогаем ни restype/resval, ни
-    // next: достаточно значения, которое вернул геттер.
+    // Проверка режима блокировки документов: системная переменная LOCKMODE.
+    // Читаем её через acedGetVar() + resbuf — единственный API, гарантированно
+    // присутствующий в заголовках данного релиза ObjectARX (acedads.h).
+    // struct resbuf полностью объявлен в adsdef.h, который включается цепочкой
+    // aced.h -> ... -> adsdef.h (StdAfx.h подключает aced.h до acedads.h),
+    // поэтому обращение к restype/resval здесь корректно; поле next мы не
+    // трогаем вовсе. Никаких acrtGetShortVariable()/isCommandActive()/
+    // documentLockStatus(): этих имён в SDK нет (C3861/C2039), см. FIX_REPORT.md.
     bool lockModeEnabled = false;
     {
-        short lockModeValue = 0;
-        if (acrtGetShortVariable(_T("LOCKMODE"), &lockModeValue) == Acad::eOk &&
-            lockModeValue != 0) {
+        resbuf rb{};
+        if (acedGetVar(_T("LOCKMODE"), &rb) == RTNORM &&
+            rb.restype == RTSHORT &&
+            rb.resval.rint != 0) {
             lockModeEnabled = true;
         }
     }
 
     if (!lockModeEnabled) {
         // Lock mode ОТКЛЮЧЁН (LOCKMODE = 0): явный lockDocument() в этом
-        // режиме вернёт Acad::eLockModeOff, поэтому писать в документ можно
-        // только когда он простаивает. Публичного API состояния документа
-        // в данном релизе заголовков нет — и AcApDocument::isCommandActive()
-        // тоже не существует (отсюда C2039 на строке 126). Единственная
-        // легальная проверка из acdocman.h:AcApDocument::documentLockStatus(),
-        // возвращающая AcAp::DocLockMode — тот же самый enum, что мы передаём
-        // в lockDocument(). Если документ залочен на запись кем-то другим
-        // (редакторская команда, .NET-приложение, другой ARX) — пропускаем
-        // тик и ждём следующий; kRead/kNone означают, что пишем безопасно.
-        if (pDoc->documentLockStatus() == AcAp::kWrite) {
-            return;
-        }
-        // Доступ к документу сериализован: наш тик обработан на главном
-        // потоке AutoCAD из очереди его сообщений, значит другой контекст
-        // (.NET/VBA/сторонняя ARX) сейчас не активен. Работаем без лока —
-        // именно так ведут себя все «родные» ARX-команды при LOCKMODE=0.
+        // режиме вернёт Acad::eLockModeOff, поэтому лок не пытаемся.
+        // Публичного API опроса состояния текущего документа в данных
+        // заголовках нет, но он и не нужен: колбэк Windows-таймера и наше
+        // WM_TRINITY_TICK обрабатываются в message pump главного потока
+        // AutoCAD, т.е. между сообщениями — вне команд AutoCAD. При
+        // выключенном lock mode другой контекст (.NET/VBA/сторонняя ARX)
+        // параллельно документу не работает. Пишем напрямую — именно так
+        // ведут себя все «родные» ARX-вызовы при LOCKMODE=0.
         trnRunCallback();
         return;
     }
