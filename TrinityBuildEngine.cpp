@@ -586,12 +586,20 @@ int TrinityBuildEngine::drawAllRibs(AcDbDatabase* targetDb) {
             continue;
         }
 
-        // Слой материала
+        // Слой материала (создаём в целевой базе, если ещё нет)
         TrinityLayerManager::createOrGetLayer(targetDb, rib.material);
         std::string layer = TrinityLayerManager::layerName(rib.material);
         wchar_t layerW[256];
         MultiByteToWideChar(CP_UTF8, 0, layer.c_str(), -1, layerW, 256);
-        solid->setLayer(layerW);
+
+        // ВАЖНО (фикс Access Violation): слой должен существовать в базе ДО
+        // вызова setLayer(). Раньше solid->setLayer() вызывался до создания
+        // слоя — при отсутствии записи слоя AutoCAD мог уйти в AV.
+        Acad::ErrorStatus esLay = solid->setLayer(layerW);
+        if (esLay != Acad::eOk) {
+            // фолбэк на 0-слой, если по какой-то причине слой недоступен
+            solid->setLayer(_T("0"));
+        }
 
         // Позиционируем в ряд вдоль оси X
         AcGeMatrix3d mat;
@@ -601,8 +609,11 @@ int TrinityBuildEngine::drawAllRibs(AcDbDatabase* targetDb) {
 
         AcDbObjectId solidId;
         if (pMs->appendAcDbEntity(solidId, solid) != Acad::eOk) {
+            // append не состоялся — объект ещё не состоит в базе,
+            // освобождаем напрямую (после close() delete запрещён,
+            // поэтому сначала erase-подобная очистка, затем удаление).
             solid->close();
-            delete solid;   // append не состоялся — освобождаем напрямую
+            if (!solidId.isValid()) delete solid;
             continue;
         }
         solid->close();

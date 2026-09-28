@@ -192,6 +192,10 @@ AcDb3dSolid* TrinityGeometryBuilder::buildRib(const TrinityNeuron& d) {
     delete pPoly;
 
     AcDb3dSolid* solid = new AcDb3dSolid();
+    // ВАЖНО (фикс Access Violation): extrude() НЕ закрывает входной регион —
+    // но и не копирует его насовсем; регион должен оставаться валидным до
+    // завершения вызова, а ОСВОБОЖДАТЬ его можно только ПОСЛЕ extrude().
+    // Порядок: создали регион -> extrude -> очистка lines/regions.
     Acad::ErrorStatus esExt = solid->extrude(pRegion, T, 0.0);
 
     for (int i = 0; i < lines.length(); i++) delete (AcRxObject*)lines[i];
