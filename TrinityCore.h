@@ -42,6 +42,16 @@ struct TrinityNeuron {
     int thickness = 10;
     int processCode = 0;       // 0=None, 2=Hole, 3=Socket
 
+    // Параметры планки (category='rib'). Значения по умолчанию — историческая
+    // геометрия D.S.3.*; каждое можно переопределить полем в JSON нейрона,
+    // тогда деталь становится динамической: размеры и толщина управляются
+    // через свойства в базе, без изменения кода плагина.
+    double ribLength   = -1;      // длина (вдоль X); -1 → width из кода детали
+    double ribHeight   = 125.0;   // высота/ширина планки (вдоль Y)
+    double ribSlotHalf = 4.0;     // полуширина прорези у края
+    double ribSlotDepth = 23.54316771; // глубина прорези (от края до дуги гнезда)
+    double ribHoleOffset = 53.0;  // смещение центра гнезда от края (глубина гнезда)
+
     std::string jsonData;      // весь JSON нейрона
 };
 
@@ -83,6 +93,9 @@ public:
 
     // Проекты
     std::vector<TrinityNeuron> loadPendingProjects();
+
+    // Все детали указанного category (например, 'rib') — для отладочной команды TRIB.
+    std::vector<TrinityNeuron> loadDetailsByCategory(const std::string& category);
 
     // Статусы
     bool markNeuronDone(int id);

@@ -46,4 +46,9 @@ public:
 
     // Главный метод: обработать все pending-проекты
     int processAllProjects(AcDbDatabase* targetDb);
+
+    // Отладка (команда TRIB): нарисовать в целевой базе все планки
+    // из базы данных с category='rib', разложив их вдоль оси X.
+    // Возвращает количество успешно построенных планок.
+    int drawAllRibs(AcDbDatabase* targetDb);
 };

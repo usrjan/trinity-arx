@@ -118,9 +118,12 @@ AcDbDatabase* TrinityBuildEngine::buildDetail(const TrinityNeuron& detail) {
     // Слой материала
     TrinityLayerManager::createOrGetLayer(tempDb, detail.material);
 
-    // Строим геометрию
+    // Строим геометрию (для планки — из динамических свойств нейрона)
     AcDb3dSolid* solid = TrinityGeometryBuilder::build(detail);
     if (!solid) {
+        wchar_t* wCode = utf2uni(detail.code.c_str());
+        acutPrintf(_T("\n[BuildEngine] Geometry build failed for %s\n"), wCode);
+        free(wCode);
         delete tempDb;
         return nullptr;
     }
@@ -534,6 +537,111 @@ int TrinityBuildEngine::processAllProjects(AcDbDatabase* targetDb) {
     }
 
     return static_cast<int>(projects.size());
+}
+
+// ============================================================
+// ОТЛАДКА (TRIB): НАРИСОВАТЬ ВСЕ ПЛАНКИ category='rib'
+// ============================================================
+// Строит геометрию каждой планки напрямую из свойств нейрона
+// (динамическая деталь) и добавляет солиды в Model Space целевой
+// базы, раскладывая их вдоль оси X с отступом. Никаких DWG-файлов
+// и XREF — только быстрая визуализация для этапа разработки.
+// Возвращает количество нарисованных планок.
+// ============================================================
+int TrinityBuildEngine::drawAllRibs(AcDbDatabase* targetDb) {
+    if (!targetDb || !m_core.isConnected()) return 0;
+
+    auto ribs = m_core.loadDetailsByCategory("rib");
+    if (ribs.empty()) {
+        acutPrintf(_T("\n[BuildEngine] TRIB: no details with category='rib' found in database\n"));
+        return 0;
+    }
+
+    // Служебные слои в целевом документе
+    TrinityLayerManager::ensureTagLayer(targetDb);
+    TrinityLayerManager::ensureBoltLayer(targetDb);
+
+    AcDbBlockTable* pBt = nullptr;
+    if (targetDb->getSymbolTable(pBt, AcDb::kForRead) != Acad::eOk) return 0;
+
+    AcDbBlockTableRecord* pMs = nullptr;
+    Acad::ErrorStatus esMs = pBt->getAt(ACDB_MODEL_SPACE, pMs, AcDb::kForWrite);
+    pBt->close();
+    if (esMs != Acad::eOk || !pMs) {
+        if (pMs) pMs->close();
+        return 0;
+    }
+
+    double offsetX = 0.0;
+    const double GAP = 100.0;   // расстояние между планками вдоль X
+    int drawn = 0;
+
+    for (auto& rib : ribs) {
+        AcDb3dSolid* solid = TrinityGeometryBuilder::build(rib);
+        if (!solid) {
+            wchar_t* wCode = utf2uni(rib.code.c_str());
+            acutPrintf(_T("\n[BuildEngine] TRIB: failed to build %s\n"), wCode);
+            free(wCode);
+            continue;
+        }
+
+        // Сдвиг каждой следующей планки вдоль X
+        AcGeMatrix3d mat;
+        mat.setToIdentity();
+        mat.setTranslation(AcGeVector3d(offsetX, 0.0, 0.0));
+        solid->transformBy(mat);
+
+        // Слой материала
+        std::string layer = TrinityLayerManager::layerName(rib.material);
+        TrinityLayerManager::createOrGetLayer(targetDb, rib.material);
+        wchar_t layerW[256];
+        MultiByteToWideChar(CP_UTF8, 0, layer.c_str(), -1, layerW, 256);
+        solid->setLayer(layerW);
+
+        AcDbObjectId solidId;
+        if (pMs->appendAcDbEntity(solidId, solid) == Acad::eOk) {
+            // Размер планки после сдвига — для расчёта следующей позиции
+            AcDbExtents ext;
+            if (solid->getGeomExtents(ext) == Acad::eOk) {
+                offsetX = ext.maxPoint().x + GAP;
+            } else {
+                double W = (rib.ribLength > 0.0) ? rib.ribLength : (double)rib.width;
+                offsetX += W + GAP;
+            }
+
+            // Болты (маркеры) как у обычной планки
+            AcDbObjectIdArray boltIds;
+            TrinityGeometryBuilder::drawBoltMarkers(rib, pMs, boltIds);
+            for (size_t i = 0; i < boltIds.length(); i++) {
+                AcDbEntity* pEnt = nullptr;
+                if (acdbOpenAcDbEntity(pEnt, boltIds[i], AcDb::kForWrite) == Acad::eOk && pEnt) {
+                    AcGeMatrix3d bm;
+                    bm.setToIdentity();
+                    bm.setTranslation(AcGeVector3d(offsetX - GAP, 0.0, 0.0));
+                    pEnt->transformBy(bm);
+                    pEnt->close();
+                }
+            }
+
+            solid->close();
+            drawn++;
+
+            wchar_t* wCode = utf2uni(rib.code.c_str());
+            acutPrintf(_T("\n[BuildEngine] TRIB: drew %s (%dx%dx%d)\n"), wCode,
+                       (int)((rib.ribLength > 0.0) ? rib.ribLength : (double)rib.width),
+                       (int)rib.ribHeight, rib.thickness);
+            free(wCode);
+        } else {
+            solid->close();
+            solid->erase();
+        }
+    }
+
+    pMs->close();
+
+    acutPrintf(_T("\n[BuildEngine] TRIB: %d of %d ribs drawn\n"),
+               drawn, (int)ribs.size());
+    return drawn;
 }
 
 // ============================================================

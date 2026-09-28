@@ -98,6 +98,56 @@ void trinityStop() {
 }
 
 // ============================================
+// TRIB — ОТЛАДКА: НАРИСОВАТЬ ВСЕ ПЛАНКИ В ЧЕРТЕЖЕ
+// ============================================
+// Команда этапа разработки: берёт активный (текущий открытый) документ,
+// при необходимости поднимает соединение с базой (используя trinity.ini)
+// и рисует в Model Space все детали category='rib' из базы, раскладывая
+// их вдоль оси X. Параметры планки (длина/высота/толщина/гнёзда) —
+// динамические, берутся из свойств нейрона.
+void trRib() {
+    AcDbDatabase* db = acdbHostApplicationServices()->workingDatabase();
+    if (!db) {
+        acutPrintf(_T("\n[Trinity] TRIB: no active document\n"));
+        return;
+    }
+
+    // Если движок не запущен (таймер остановлен) — временно подключаемся к базе
+    bool tempEngine = false;
+    if (!g_engine) {
+        TrinityDbConfig cfg;
+        if (!loadTrinityConfig(cfg)) {
+            acutPrintf(_T("\n[Trinity] TRIB: config load failed. Run TSTART or fix trinity.ini\n"));
+            return;
+        }
+        g_engine = new TrinityBuildEngine(cfg.basePath);
+        if (!g_engine->init(cfg.host.c_str(), cfg.user.c_str(),
+                            cfg.pass.c_str(), cfg.db.c_str())) {
+            acutPrintf(_T("\n[Trinity] TRIB: failed to connect to database\n"));
+            delete g_engine;
+            g_engine = nullptr;
+            return;
+        }
+        tempEngine = true;
+    }
+
+    int drawn = g_engine->drawAllRibs(db);
+
+    if (tempEngine) {
+        g_engine->shutdown();
+        delete g_engine;
+        g_engine = nullptr;
+    }
+
+    if (drawn > 0) {
+        // Впишем вид в результат, чтобы планки сразу было видно
+        acedCommandS(RTSTR, _T("_.ZOOM"), RTSTR, _T("_E"), RTNONE);
+        acedUpdateDisplay();
+    }
+    acutPrintf(_T("\n[Trinity] TRIB done: %d ribs drawn in current drawing.\n"), drawn);
+}
+
+// ============================================
 // ОБРАБОТКА ОДНОГО ТИКА
 // ============================================
 // Вызывается ТОЛЬКО из TimerProc, то есть с главного потока AutoCAD

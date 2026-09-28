@@ -189,6 +189,41 @@ std::vector<TrinityNeuron> TrinityCore::loadPendingProjects() {
 }
 
 // ============================================
+// ЗАГРУЗКА ДЕТАЛЕЙ ПО CATEGORY (TRIB — отладочная команда)
+// ============================================
+std::vector<TrinityNeuron> TrinityCore::loadDetailsByCategory(const std::string& category) {
+    std::vector<TrinityNeuron> details;
+    if (!m_connected) return details;
+
+    const std::string query =
+        "SELECT id, "
+        "  JSON_UNQUOTE(JSON_EXTRACT(data, '$.code')), "
+        "  type, "
+        "  COALESCE(JSON_UNQUOTE(JSON_EXTRACT(data, '$.category')), ''), "
+        "  COALESCE(JSON_UNQUOTE(JSON_EXTRACT(data, '$.material')), 'PLYWOOD-FSF'), "
+        "  COALESCE(JSON_UNQUOTE(JSON_EXTRACT(data, '$.status')), ''), "
+        "  data "
+        "FROM neuron "
+        "WHERE type = 'detail' "
+        "  AND JSON_UNQUOTE(JSON_EXTRACT(data, '$.category')) = " + escapeSqlLiteral(category) + " "
+        "  AND is_deleted = 0 "
+        "ORDER BY CAST(COALESCE(JSON_UNQUOTE(JSON_EXTRACT(data, '$.sort')), '0') AS UNSIGNED), id";
+
+    if (mysql_query(m_mysql, query.c_str()) != 0) return details;
+
+    MYSQL_RES* result = mysql_store_result(m_mysql);
+    if (!result) return details;
+
+    MYSQL_ROW row;
+    while ((row = mysql_fetch_row(result))) {
+        details.push_back(parseNeuronRow(row));
+    }
+
+    mysql_free_result(result);
+    return details;
+}
+
+// ============================================
 // ОТМЕТКА "DONE"
 // ============================================
 bool TrinityCore::markNeuronDone(int id) {
@@ -199,6 +234,36 @@ bool TrinityCore::markNeuronDone(int id) {
         + std::to_string(id);
 
     return mysql_query(m_mysql, query.c_str()) == 0;
+}
+
+// ============================================
+// ПОИСК ЧИСЛОВОГО СВОЙСТВА В JSON НЕЙРОНА
+// Простой поиск '"key": number' без полноценного парсера — формат
+// данных генерируется нашей же базой (JSON_OBJECT). Возвращает true,
+// если свойство найдено и корректно разобрано.
+// ============================================
+static bool jsonFindNumber(const std::string& json, const char* key, double& out) {
+    const std::string pat = std::string("\"") + key + "\"";
+    size_t p = json.find(pat);
+    while (p != std::string::npos) {
+        size_t colon = json.find(':', p + pat.size());
+        if (colon == std::string::npos) return false;
+        size_t v = colon + 1;
+        while (v < json.size() && (json[v] == ' ' || json[v] == '\t' ||
+                                   json[v] == '\n' || json[v] == '\r')) v++;
+        // Значение должно быть числом (не строка, не объект, не массив)
+        if (v < json.size() && (isdigit((unsigned char)json[v]) || json[v] == '-' || json[v] == '+')) {
+            char* end = nullptr;
+            double val = strtod(json.c_str() + v, &end);
+            if (end && end != json.c_str() + v) {
+                out = val;
+                return true;
+            }
+            return false;
+        }
+        p = json.find(pat, p + pat.size());
+    }
+    return false;
 }
 
 // ============================================
@@ -218,6 +283,21 @@ TrinityNeuron TrinityCore::parseNeuronRow(MYSQL_ROW row) {
     if (!n.code.empty()) {
         sscanf_s(n.code.c_str(), "D.S.%d.%d.%d.%d",
                  &n.processCode, &n.width, &n.height, &n.thickness);
+    }
+
+    // Динамические свойства планки (category='rib') из JSON нейрона.
+    // Если поля в JSON нет — остаются значения по умолчанию (см. TrinityNeuron),
+    // т.е. историческая геометрия сохраняется, а размеры/толщина планки
+    // теперь управляются через свойства в базе.
+    if (n.category == "rib") {
+        double v = 0;
+        if (jsonFindNumber(n.jsonData, "rib_length", v))     n.ribLength = v;
+        if (jsonFindNumber(n.jsonData, "rib_height", v))     n.ribHeight = v;
+        if (jsonFindNumber(n.jsonData, "rib_slot_half", v))  n.ribSlotHalf = v;
+        if (jsonFindNumber(n.jsonData, "rib_slot_depth", v)) n.ribSlotDepth = v;
+        if (jsonFindNumber(n.jsonData, "rib_hole_offset", v)) n.ribHoleOffset = v;
+        // Толщина: явное свойство thickness имеет приоритет над кодом детали
+        if (jsonFindNumber(n.jsonData, "thickness", v))      n.thickness = (int)v;
     }
 
     return n;

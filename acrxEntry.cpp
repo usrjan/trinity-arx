@@ -14,7 +14,12 @@ void initApp() {
         _T("TSTOP"), _T("TSTOP"),
         ACRX_CMD_MODAL, trinityStop);
 
-    acutPrintf(_T("\n[Trinity] Plugin loaded. TSTART / TSTOP\n"));
+    // Отладочная команда: нарисовать все планки (category='rib') в текущем чертеже
+    acedRegCmds->addCommand(_T("TRINITY_COMMANDS"),
+        _T("TRIB"), _T("TRIB"),
+        ACRX_CMD_MODAL, trRib);
+
+    acutPrintf(_T("\n[Trinity] Plugin loaded. TSTART / TSTOP / TRIB\n"));
 }
 
 // ============================================

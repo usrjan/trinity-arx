@@ -522,11 +522,17 @@ INSERT INTO neuron (pid, type, data) VALUES (
 );
 
 -- ============================================
--- ПЛАНКИ (D.S.3)
+-- ПЛАНКИ (D.S.3) — динамическая деталь:
+-- размеры и толщина управляются свойствами нейрона
+-- (rib_length, rib_height, thickness, rib_slot_half,
+--  rib_slot_depth, rib_hole_offset). Если свойство не задано —
+-- используется значение по умолчанию / из кода детали.
 -- ============================================
 INSERT INTO neuron (pid, type, data) VALUES
-(@ribs_id, 'detail', JSON_OBJECT('code', 'D.S.3.425.125.10', 'category', 'rib', 'material', 'PLYWOOD-FSF', 'sort', 301)),
-(@ribs_id, 'detail', JSON_OBJECT('code', 'D.S.3.850.125.10', 'category', 'rib', 'material', 'PLYWOOD-FSF', 'sort', 302));
+(@ribs_id, 'detail', JSON_OBJECT('code', 'D.S.3.425.125.10', 'category', 'rib', 'material', 'PLYWOOD-FSF', 'sort', 301,
+    'rib_length', 425, 'rib_height', 125, 'thickness', 10)),
+(@ribs_id, 'detail', JSON_OBJECT('code', 'D.S.3.850.125.10', 'category', 'rib', 'material', 'PLYWOOD-FSF', 'sort', 302,
+    'rib_length', 850, 'rib_height', 125, 'thickness', 10));
 
 -- ============================================
 -- КОНСТРУКЦИЯ: Щит 425×425 + 2 планки

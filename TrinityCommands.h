@@ -9,3 +9,4 @@ extern UINT_PTR g_timerId;
 void trinityStart();
 void trinityStop();
 void trinityProcess();
+void trRib();   // отладка: нарисовать все планки (category='rib') в текущем чертеже
