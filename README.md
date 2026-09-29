@@ -6,11 +6,11 @@
 
 TrinityARX читает **нейроны** и **синапсы** из MySQL
 иматериализует их в **DWG-чертежи** внутри AutoCAD.  
-Каждый проект, конструкция и деталь — это запись в базе. Плагин сам строит всё, чего нет на диске, и вставляет как XREF.
+Каждый проект, конструкция и деталь — это запись в базе. Плагин сам строит всё, чего нет на диске. Результат сборки — файлы DWG (вложенные детали и конструкции подключаются внутрь них как XREF); вставка готового проекта в активный чертёж не выполняется.
 
 - **База данных — источник истины.** Никакого хардкода в плагине.
 - **Рекурсивная сборка.** Деталь → конструкция → проект. Автоматически.
-- **Кэш на диске.** Если файл уже есть — XREF вставляется мгновенно.
+- **Кэш на диске.** Файлы складываются в `base\details`, `base\assemblies`, `base\projects` (см. «Структура файлов»). Перед сборкой pending-проекта его старые файлы удаляются (`deleteProjectFiles`).
 - **Один проект — один DWG.** Плюс отдельные DWG для деталей и конструкций.
 
 ## Архитектура
@@ -18,13 +18,13 @@ TrinityARX читает **нейроны** и **синапсы** из MySQL
 ```
 ┌────────────────────────────────────────┐    
 │  AutoCAD 2026                          │    
-│  TRINITY_START / TRINITY_STOP          │    
+│  TSTART / TSTOP                      │    
 └────────────────┬───────────────────────┘    
                  │    
 ┌────────────────┴───────────────────────┐    
 │  TrinityBuildEngine                    │    
-│  Рекурсивный ensureFileExists /        │    
-│  insertProjectToTarget                 │    
+│  processAllProjects /                │    
+│  рекурсивный ensureFileExists        │    
 └────────────────┬───────────────────────┘    
                  │    
 ┌────────────────┴───────────────────────┐    
@@ -58,7 +58,8 @@ TrinityARX читает **нейроны** и **синапсы** из MySQL
 ## Сборка
 
 1. Открыть `Trinity.vcxproj` в Visual Studio
-2. Проверить в свойствах проекта:3. **C/C++ → General → Additional Include Directories:**  
+2. Проверить в свойствах проекта:
+3. **C/C++ → General → Additional Include Directories:**  
   `D:\devel\ObjectARX\inc;D:\devel\MySQL\include`
 3. **Linker → General → Additional Library Directories:**  
   `D:\devel\ObjectARX\lib-x64;D:\devel\MySQL\lib`
@@ -73,8 +74,9 @@ TrinityARX читает **нейроны** и **синапсы** из MySQL
 
 1. `APPLOAD` в AutoCAD
 2. Выбрать `_Trinity.arx`
-3. Команды:4. `TRINITY_START` — запустить таймер (проверка базы каждые 5 сек)
-4. `TRINITY_STOP` — остановить таймер
+3. Команды:
+   - `TSTART` — запустить таймер (проверка базы каждые 5 сек)
+   - `TSTOP` — остановить таймер
 
 
 ## Настройка базы
@@ -153,11 +155,33 @@ D:\trinity\
 - `TRINITY_MAT_CONCRETE` — 254
 - `TRINITY_MAT_ALUMINIUM` — 9
 
+## Безопасность имён файлов
+
+Коды нейронов из БД используются в именах DWG-файлов и блоков XREF, поэтому
+проходят через `TrinityFileManager::sanitizeFileName()`:
+
+- запрещённые символы Windows (`< > : " / \ | ? *`) и управляющие заменяются на `_`;
+- обрезаются ведущие/замыкающие точки и пробелы — путь вида `../../etc` становится безобидным именем;
+- имя усечётся до 120 байт по границе UTF-8 символа.
+
+Санитизация применяется централизованно в `getFilePath()` и `attachXref()`.
+Для корректных кодов (`DET-001`, кириллические имена) результат идентичен входу,
+поэтому уже собранные файлы не переименовываются.
+
+## Конвертация путей и создание папок
+
+- Все пути конвертируются из UTF-8 в wide-строки безопасным хелпером `utf8ToWide()`
+  (`StdAfx.h/.cpp`) — динамический буфер, проверка результата. Старые
+  `stringToWide()` и `utf2uni()` в новом коде не используются (первая помечена `[[deprecated]]`).
+- Каталоги создаются `createDirectoryRecursiveA/W()` (`TrinityFileManager`):
+  рекурсивно, через `_wmkdir`, с поддержкой UNC и корректной обработкой `EEXIST`.
+  ANSI `_mkdir/_access` в коде не используется — кириллические пути работают.
+
 ## Как это работает
 
 ### 1. Таймер
 
-Каждые 5 секунд `TRINITY_START` вызывает `processAllProjects()`.
+Каждые 5 секунд таймер (запускается командой `TSTART`) вызывает `processAllProjects()`.
 
 ### 2. Рекурсивная сборка
 
@@ -182,7 +206,7 @@ processAllProjects
 ├─ ensureFileExists(D.S.2.425.425.10)    
 └─ ...    
 │    
-└─ wblock + saveAs
+└─ wblock + saveAs   → projects\PROJ-TEST-001.dwg (сборка проекта завершена)
 ```
 
 ### 3. `wblock` для чистых DWG
@@ -194,7 +218,7 @@ processAllProjects
 3. Добавляем атрибут `DETAIL_CODE`
 4. `wblock` → `cleanDb`
 5. Сохраняем `cleanDb` на диск
-6. Вставляем XREF в родительскую базу
+6. Вставляем XREF в родительскую временную базу (при сборке конструкции/проекта); для самой детали шаг не применяется
 
 
 ### 4. XREF-иерархия
@@ -264,21 +288,22 @@ D:\\trinity\\assemblies\*.dwg
 D:\\trinity\\projects\*.dwg
 2. Сбросить статус проекта:		UPDATE neuron  
 SET data = JSON_SET(data, '$.status', 'pending')  WHERE JSON_UNQUOTE(JSON_EXTRACT(data, '$.code')) = 'PROJ-TEST-001';
-3. `TRINITY_START` в AutoCAD.
+3. `TSTART` в AutoCAD.
 
 
 ## Файлы плагина
 
 ```
 TrinityARX/    
-├── StdAfx.h / StdAfx.cpp              — прекомпилированные заголовки + utf2uni    
+├── StdAfx.h / StdAfx.cpp              — прекомпилированные заголовки + utf8ToWide    
 ├── TrinityCore.h / TrinityCore.cpp    — БД, нейроны, синапсы    
 ├── TrinityLayerManager.h / .cpp       — слои материалов, _tag, _bolt    
 ├── TrinityAttributeBuilder.h / .cpp   — атрибут DETAIL_CODE    
 ├── TrinityGeometryBuilder.h / .cpp    — щит, планка, боковая стенка    
 ├── TrinityFileManager.h / .cpp        — файлы, wblock, XREF    
 ├── TrinityBuildEngine.h / .cpp        — рекурсивный сборщик    
-├── TrinityCommands.h / .cpp           — TRINITY_START / TRINITY_STOP    
+├── TrinityCommands.h / .cpp           — TSTART / TSTOP
+├── TrinityTimer.h / .cpp                — безопасный таймер (WM_TRINITY_TICK, doc lock)    
 └── acrxEntry.cpp                      — точка входа AutoCAD
 ```
 
