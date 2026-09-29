@@ -2,10 +2,30 @@
 #include "StdAfx.h"
 #include "TrinityCore.h"
 
+// Коды ошибок MySQL, означающие, что соединение разорвано и его нужно
+// пересоздать (mysql_ping их тоже возвращает):
+//   2006 CR_SERVER_GONE_ERROR     — сервер закрыл соединение (wait_timeout)
+//   2013 CR_SERVER_LOST           — потеря связи во время запроса
+//   2003 CR_CONNECTION_ERROR      — сервер недоступен
+static bool isFatalConnectionError(unsigned int errNo) {
+    return errNo == 2006 || errNo == 2013 || errNo == 2003;
+}
+
 // ============================================
 // КОНСТРУКТОР / ДЕСТРУКТОР
 // ============================================
 TrinityCore::~TrinityCore() { disconnect(); }
+
+// ============================================
+// ЗАКРЫТИЕ ХЭНДЛА
+// ============================================
+void TrinityCore::closeHandle() {
+    if (m_mysql) {
+        mysql_close(m_mysql);   // mysql_close безопасен и для несоединённого хэндла
+        m_mysql = nullptr;
+    }
+    m_connected = false;
+}
 
 // ============================================
 // ПОДКЛЮЧЕНИЕ
@@ -14,11 +34,33 @@ bool TrinityCore::connect(const char* host, const char* user,
                            const char* pass, const char* db) {
     if (m_connected) return true;
 
+    // Запоминаем параметры — они пригодятся ensureConnected() для
+    // автоматического переподключения после обрыва.
+    m_host = host ? host : "";
+    m_user = user ? user : "";
+    m_pass = pass ? pass : "";
+    m_db   = db   ? db   : "";
+
+    closeHandle();  // на случай повторного connect() с другим набором параметров
+
     m_mysql = mysql_init(nullptr);
-    if (!mysql_real_connect(m_mysql, host, user, pass, db, 0, nullptr, 0)) {
-        acutPrintf(_T("\n[TrinityCore] Connection error: %hs\n"), mysql_error(m_mysql));
-        mysql_close(m_mysql);
-        m_mysql = nullptr;
+    if (!m_mysql) {
+        acutPrintf(_T("\n[TrinityCore] mysql_init failed\n"));
+        return false;
+    }
+
+    // Таймауты: без них блокирующий TCP-запрос при «зависшем» сервере
+    // может подвесить поток таймера AutoCAD на минуты.
+    unsigned int connectTimeoutSec = 5;
+    unsigned int readTimeoutSec    = 15;
+    mysql_options(m_mysql, MYSQL_OPT_CONNECT_TIMEOUT, &connectTimeoutSec);
+    mysql_options(m_mysql, MYSQL_OPT_READ_TIMEOUT, &readTimeoutSec);
+
+    if (!mysql_real_connect(m_mysql, m_host.c_str(), m_user.c_str(),
+                            m_pass.c_str(), m_db.c_str(), 0, nullptr, 0)) {
+        acutPrintf(_T("\n[TrinityCore] Connection error (%u): %hs\n"),
+                   mysql_errno(m_mysql), mysql_error(m_mysql));
+        closeHandle();
         return false;
     }
 
@@ -29,11 +71,56 @@ bool TrinityCore::connect(const char* host, const char* user,
 }
 
 void TrinityCore::disconnect() {
-    if (m_mysql && m_connected) {
-        mysql_close(m_mysql);
-        m_mysql = nullptr;
-        m_connected = false;
+    closeHandle();
+}
+
+// ============================================
+// ПРОВЕРКА ЖИВОСТИ / АВТОПЕРЕПОДКЛЮЧЕНИЕ
+// Раньше соединение создавалось один раз в init(), а все операции
+// проверяли только флаг m_connected. Если MySQL закрывал idle-соединение
+// (wait_timeout) или пропадала сеть, каждый следующий mysql_query
+// молча возвращал ошибку, loadPendingProjects() давал пустой список,
+// и таймер «тихо» тикал впустую. Теперь каждая операция начинается с
+// ensureConnected(): ping подтверждает живость, при обрыве выполняется
+// переподключение с сохранёнными параметрами и логирование в консоль.
+// ============================================
+bool TrinityCore::ensureConnected() {
+    if (!m_mysql) {
+        // Хэндла нет: если параметры подключения известны (после первой
+        // неудачной попытки TSTART) — пробуем подключиться заново.
+        if (!m_host.empty() && !m_db.empty())
+            return connect(m_host.c_str(), m_user.c_str(), m_pass.c_str(), m_db.c_str());
+        return false;
     }
+
+    if (m_connected && mysql_ping(m_mysql) == 0)
+        return true;   // соединение живо — быстрый путь
+
+    unsigned int errNo = mysql_errno(m_mysql);
+    if (m_connected && !isFatalConnectionError(errNo)) {
+        // mysql_ping упал не из-за обрыва (например, читается незавершённый
+        // результат). Сбрасываем состояние и пробуем переподключиться ниже.
+        acutPrintf(_T("\n[TrinityCore] mysql_ping failed (%u): %hs\n"),
+                   errNo, mysql_error(m_mysql));
+    }
+
+    acutPrintf(_T("\n[TrinityCore] Connection lost (errno=%u). Reconnecting to '%hs'...\n"),
+               errNo, m_host.c_str());
+
+    // Полностью закрываем мёртвый хэндл: connect() при m_mysql == nullptr
+    // просто создаст новый. Без этого шага mysql_close() вызывался бы для
+    // уже разорванного соединения, а mysql_real_connect() — для хэндла,
+    // на котором он уже выполнялся (недокументированное поведение libmysql).
+    closeHandle();
+
+    // connect() запомнит/переиспользует параметры и выставит таймауты.
+    if (connect(m_host.c_str(), m_user.c_str(), m_pass.c_str(), m_db.c_str())) {
+        acutPrintf(_T("[TrinityCore] Reconnected successfully.\n"));
+        return true;
+    }
+
+    acutPrintf(_T("[TrinityCore] Reconnect failed. DB operations disabled until next retry.\n"));
+    return false;
 }
 
 // ============================================
@@ -45,7 +132,11 @@ void TrinityCore::disconnect() {
 // ============================================
 std::string TrinityCore::escapeSqlLiteral(const std::string& value, bool emptyMeansNull) const {
     if (value.empty() && emptyMeansNull) return "NULL";
-    if (!m_connected) return "'"; // соединение недоступно — вернём заведомо невалидный литерал
+    // mysql_real_escape_string требует живого соединения. ensureConnected()
+    // не может быть вызван из-за const — при отсутствии соединения возвращаем
+    // заведомо невалидный литерал; все публичные методы уже вызывают
+    // ensureConnected() до формирования запроса.
+    if (!m_connected) return "'";
 
     std::vector<char> buf(value.size() * 2 + 1);
     unsigned long outLen = mysql_real_escape_string(
@@ -61,10 +152,27 @@ std::string TrinityCore::escapeSqlLiteral(const std::string& value, bool emptyMe
 }
 
 // ============================================
+// ЛОГИРОВАНИЕ ОШИБОК SQL
+// Раньше ошибки mysql_query проглатывались молча (метод просто возвращал
+// nullptr/пустой список). Теперь код и текст ошибки выводятся в консоль
+// AutoCAD, а при фатальных кодах обрыва сбрасывается m_connected —
+// следующий ensureConnected() переподключится.
+// ============================================
+void TrinityCore::logQueryError(const char* context, const std::string& query) {
+    unsigned int errNo = m_mysql ? mysql_errno(m_mysql) : 0;
+    acutPrintf(_T("\n[TrinityCore] SQL error in %hs (%u): %hs\n"),
+               context, errNo, m_mysql ? mysql_error(m_mysql) : "no handle");
+    acutPrintf(_T("[TrinityCore] Query: %hs\n"),
+               query.substr(0, 300).c_str());   // не затапливаем консоль длинным JSON
+    if (isFatalConnectionError(errNo))
+        m_connected = false;   // ping ещё не падал на этом хэндле — помечаем для реконнекта
+}
+
+// ============================================
 // ЗАГРУЗКА НЕЙРОНА ПО КОДУ
 // ============================================
 TrinityNeuron* TrinityCore::loadNeuronByCode(const std::string& code) {
-    if (!m_connected) return nullptr;
+    if (!ensureConnected()) return nullptr;
 
     const std::string query =
         "SELECT id, "
@@ -79,7 +187,10 @@ TrinityNeuron* TrinityCore::loadNeuronByCode(const std::string& code) {
         "  AND is_deleted = 0 "
         "LIMIT 1";
 
-    if (mysql_query(m_mysql, query.c_str()) != 0) return nullptr;
+    if (mysql_query(m_mysql, query.c_str()) != 0) {
+        logQueryError("loadNeuron", query);
+        return nullptr;
+    }
 
     MYSQL_RES* result = mysql_store_result(m_mysql);
     if (!result || mysql_num_rows(result) == 0) {
@@ -97,7 +208,7 @@ TrinityNeuron* TrinityCore::loadNeuronByCode(const std::string& code) {
 // ЗАГРУЗКА НЕЙРОНА ПО ID
 // ============================================
 TrinityNeuron* TrinityCore::loadNeuronById(int id) {
-    if (!m_connected) return nullptr;
+    if (!ensureConnected()) return nullptr;
 
     const std::string query =
         "SELECT id, "
@@ -109,7 +220,10 @@ TrinityNeuron* TrinityCore::loadNeuronById(int id) {
         "  data "
         "FROM neuron WHERE id = " + std::to_string(id) + " AND is_deleted = 0";
 
-    if (mysql_query(m_mysql, query.c_str()) != 0) return nullptr;
+    if (mysql_query(m_mysql, query.c_str()) != 0) {
+        logQueryError("loadNeuron", query);
+        return nullptr;
+    }
 
     MYSQL_RES* result = mysql_store_result(m_mysql);
     if (!result || mysql_num_rows(result) == 0) {
@@ -128,7 +242,7 @@ TrinityNeuron* TrinityCore::loadNeuronById(int id) {
 // ============================================
 std::vector<TrinitySynapse> TrinityCore::loadChildren(int parentId) {
     std::vector<TrinitySynapse> children;
-    if (!m_connected) return children;
+    if (!ensureConnected()) return children;
 
     const std::string query =
         "SELECT s.id, s.parent, s.child, "
@@ -139,7 +253,10 @@ std::vector<TrinitySynapse> TrinityCore::loadChildren(int parentId) {
         "WHERE s.parent = " + std::to_string(parentId) + " AND n.is_deleted = 0 "
         "ORDER BY s.id";
 
-    if (mysql_query(m_mysql, query.c_str()) != 0) return children;
+    if (mysql_query(m_mysql, query.c_str()) != 0) {
+        logQueryError("loadChildren", query);
+        return children;
+    }
 
     MYSQL_RES* result = mysql_store_result(m_mysql);
     if (!result) return children;
@@ -158,7 +275,7 @@ std::vector<TrinitySynapse> TrinityCore::loadChildren(int parentId) {
 // ============================================
 std::vector<TrinityNeuron> TrinityCore::loadPendingProjects() {
     std::vector<TrinityNeuron> projects;
-    if (!m_connected) return projects;
+    if (!ensureConnected()) return projects;
 
     const char* query =
         "SELECT id, "
@@ -174,7 +291,10 @@ std::vector<TrinityNeuron> TrinityCore::loadPendingProjects() {
         "  AND is_deleted = 0 "
         "ORDER BY id";
 
-    if (mysql_query(m_mysql, query) != 0) return projects;
+    if (mysql_query(m_mysql, query) != 0) {
+        logQueryError("loadPendingProjects", query);
+        return projects;
+    }
 
     MYSQL_RES* result = mysql_store_result(m_mysql);
     if (!result) return projects;
@@ -192,13 +312,17 @@ std::vector<TrinityNeuron> TrinityCore::loadPendingProjects() {
 // ОТМЕТКА "DONE"
 // ============================================
 bool TrinityCore::markNeuronDone(int id) {
-    if (!m_connected) return false;
+    if (!ensureConnected()) return false;
 
     const std::string query =
         "UPDATE neuron SET data = JSON_SET(data, '$.status', 'done') WHERE id = "
         + std::to_string(id);
 
-    return mysql_query(m_mysql, query.c_str()) == 0;
+    if (mysql_query(m_mysql, query.c_str()) != 0) {
+        logQueryError("markNeuronDone", query);
+        return false;
+    }
+    return true;
 }
 
 // ============================================
