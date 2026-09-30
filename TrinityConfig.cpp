@@ -5,12 +5,16 @@
 // ============================================
 // Путь к trinity.ini в папке самой DLL
 // ============================================
-static std::wstring moduleIniPath() {
+std::wstring TrinityConfig::iniPath() {
     wchar_t buf[MAX_PATH] = {0};
     HMODULE hm = nullptr;
+    // ВАЖНО: флаг FROM_ADDRESS привязан к АДРЕСУ ЭТОЙ ФУНКЦИИ — он одно-
+    // временно идентифицирует модуль, в котором функция скомпилирована.
+    // При переносе кода нельзя брать адрес из другой TU (адрес должен
+    // лежать внутри образа этой DLL).
     GetModuleHandleEx(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS |
                       GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
-                      (LPCTSTR)&moduleIniPath, &hm);
+                      (LPCTSTR)&TrinityConfig::iniPath, &hm);
     DWORD len = GetModuleFileName(hm, buf, MAX_PATH);
     if (len == 0 || len >= MAX_PATH) return L"";
 
@@ -23,7 +27,7 @@ static std::wstring moduleIniPath() {
 // ============================================
 // Чтение строки из INI (ANSI-кодировка файла)
 // ============================================
-static std::string readIniStr(const std::wstring& ini,
+std::string TrinityConfig::readIniStr(const std::wstring& ini,
                               const wchar_t* section,
                               const wchar_t* key) {
     wchar_t buf[512] = {0};
@@ -41,10 +45,10 @@ static std::string readIniStr(const std::wstring& ini,
 }
 
 // ============================================
-// Загрузка конфига
+// Загрузка конфига (статическая утилита класса)
 // ============================================
-bool loadTrinityConfig(TrinityDbConfig& out) {
-    std::wstring ini = moduleIniPath();
+bool TrinityConfig::load(DbConfig& out) {
+    std::wstring ini = iniPath();
     if (ini.empty()) {
         acutPrintf(_T("\n[TrinityConfig] Cannot resolve module path\n"));
         return false;
@@ -78,4 +82,13 @@ bool loadTrinityConfig(TrinityDbConfig& out) {
         out.basePath = "D:\\trinity"; // резерв по умолчанию
     }
     return true;
+}
+
+// ============================================
+// «Бросковый» вариант: конфиг по значению
+// ============================================
+TrinityConfig::DbConfig TrinityConfig::load() {
+    TrinityDbConfig cfg;
+    load(cfg);   // при неудаче поля останутся пустыми -> isValid()==false
+    return cfg;
 }

@@ -4,8 +4,6 @@
 #include "TrinityCore.h"
 #include "TrinityFileManager.h"
 #include <set>      // std::set — отслеживание активных кодов (защита от циклов графа)
-#include <string>   // std::string — ключи кэша и коды нейронов
-#include <unordered_map> // хэш-карта кэша: O(1) поиск собранных файлов по коду
 
 class TrinityBuildEngine {
 private:
@@ -115,7 +113,9 @@ private:
     // Гарантирует существование родительской директории файла (UTF-8 путь).
     // Нужен перед saveDwg: промежуточные папки могут отсутствовать,
     // а путь может содержать кириллицу (создаётся через _wmkdir).
-    bool ensureDirectoryForFile(const std::string& filePathUtf8) {
+    // Статическая утилита: не трогает состояние движка — только файл-
+    // систему; вызывается и из buildDetail, и из buildDwg одинаково.
+    static bool ensureDirectoryForFile(const std::string& filePathUtf8) {
         return TrinityFileManager::createDirectoryRecursiveA(
                    TrinityFileManager::parentDir(filePathUtf8));
     }
@@ -140,6 +140,13 @@ public:
         m_core.tripBreakerNow();
         m_core.disconnect();
     }
+
+    // Готов ли движок к работе: соединение с БД реально установлено
+    // (после init()/connect() и до shutdown()/disconnect()). Команды
+    // проверяют этот признак вместо старого `if (g_engine)` — синглтон
+    // не бывает null, поэтому «запущено/не запущено» отделяется состоя-
+    // нием ядра, а не указателя.
+    bool isConnected() const { return m_core.isConnected(); }
 
     // Главный метод: обработать все pending-проекты
     int processAllProjects(AcDbDatabase* targetDb);
