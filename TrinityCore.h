@@ -92,9 +92,17 @@ private:
     // При фатальных кодах обрыва помечает соединение мёртвым для реконнекта.
     void logQueryError(const char* context, const std::string& query);
 
+    // Проверка после подключения: существует ли уникальный индекс neuron.idx_code
+    // (он покрывает виртуальный столбец code и обязателен, чтобы loadNeuronByCode()
+    // не сканировал таблицу целиком). При отсутствии — предупреждение в консоль.
+    void verifyCodeIndex();
+
 public:
 
     // Нейроны
+    // Поиск по бизнес-коду (D.S.0.425.850.10 / PROJ-TEST-001). Опирается на
+    // виртуальный столбец neuron.code + UNIQUE KEY idx_code — см. комментарии
+    // к реализации в TrinityCore.cpp. Вызывается рекурсивно при сборке DWG.
     TrinityNeuron* loadNeuronByCode(const std::string& code);
     TrinityNeuron* loadNeuronById(int id);
 
