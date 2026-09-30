@@ -299,14 +299,10 @@ AcDbDatabase* TrinityBuildEngine::buildDetail(const TrinityNeuron& detail) {
 
     pMs2->close();
 
-    // Финальный отчёт
-    /*
-    wchar_t* wCode = utf2uni(detail.code.c_str());
-    // Фикс: %s для wchar_t* — неопределённое поведение (ANSI-printf читает
-    // wide-строку как char*, печатает мусор/краш). Только %ls.
-    acutPrintf(_T("\n[BuildEngine] Detail built: %ls\n"), wCode);
-    free(wCode);
-    */
+    // Финальный отчёт (отключён; при включении — utf8ToWide + %ls:
+    // %s для wchar_t* = UB, а utf2uni возвращает сырой malloc-буфер,
+    // требующий free()).
+    // acutPrintf(_T("\n[BuildEngine] Detail built: %ls\n"), utf8ToWide(detail.code).c_str());
 
     return cleanDb;
 }
@@ -334,28 +330,32 @@ AcDbDatabase* TrinityBuildEngine::buildDwg(const TrinityNeuron& neuron, int dept
 
     auto children = m_core.loadChildren(neuron.id);
 
-    /*
-    wchar_t* wCode = utf2uni(neuron.code.c_str());
-    // Фикс: wchar_t* аргумент требует %ls, а не %s
-    acutPrintf(_T("\n[BuildEngine] Building %ls: %d children (depth=%d)\n"),
-        wCode, static_cast<int>(children.size()), depth);
-    free(wCode);
-    */
+    // Отладочный лог отключён по умолчанию; при включении — только
+    // utf8ToWide() (безопасная конвертация, std::wstring), без utf2uni/free.
+    // acutPrintf(_T("\n[BuildEngine] Building %ls: %d children (depth=%d)\n"),
+    //     utf8ToWide(neuron.code).c_str(), static_cast<int>(children.size()), depth);
 
     for (auto& syn : children) {
         AcGePoint3d childPos = syn.position.toAcGe();
 
-        /*
-        wchar_t* wChild = utf2uni(syn.childCode.c_str());
-        // Фикс: wchar_t* аргумент требует %ls, а не %s
-        acutPrintf(_T("\n[BuildEngine] Child: %ls (depth=%d)\n"), wChild, depth);
-        free(wChild);
-        */
+        // (отладочный лог ребёнка отключён; при включении — utf8ToWide())
 
         std::string childFilePath = ensureFileExists(syn.childCode, depth + 1);
         if (childFilePath.empty()) {
-            acutPrintf(_T("\n[BuildEngine] ensureFileExists returned EMPTY\n"));
-            continue;
+            // ============================================================
+            // СТРАТЕГИЯ «ЧЕСТНОЙ СБОРКИ» (защита от ложного done)
+            // ============================================================
+            // Было: проблемный ребёнок молча пропускался (continue), сборка
+            // продолжалась и проект в итоге помечался 'done' с НЕПОЛНЫМ
+            // комплектом — дефектный DWG расходился в производство.
+            // Стало: отсутствие любого ребёнка = провал сборки узла.
+            // Возвращаем пустой путь наверх по рекурсии; родитель тоже
+            // проваливается, пока ошибка не дойдёт до processAllProjects,
+            // где проект получит retry/ошибочный статус вместо 'done'.
+            acutPrintf(_T("\n[BuildEngine] Child build failed: %ls — parent aborted\n"),
+                       utf8ToWide(syn.childCode).c_str());
+            delete tempDb;   // временная база с частично навешанными XREF не нужна
+            return nullptr;
         }
 
         //acutPrintf(_T("\n[BuildEngine] Got file path, attaching XREF...\n"));
@@ -369,7 +369,13 @@ AcDbDatabase* TrinityBuildEngine::buildDwg(const TrinityNeuron& neuron, int dept
             //acutPrintf(_T("\n[BuildEngine] XREF appended to ids\n"));
         }
         else {
-            acutPrintf(_T("\n[BuildEngine] attachXref returned kNull\n"));
+            // Файл ребёнка есть, но вставить его не удалось (битый DWG,
+            // блокировка, нехватка памяти) — это тоже неполная сборка.
+            // Раньше просто логировали и шли дальше; теперь — провал узелa.
+            acutPrintf(_T("\n[BuildEngine] attachXref returned kNull for %ls — parent aborted\n"),
+                       utf8ToWide(syn.childCode).c_str());
+            delete tempDb;
+            return nullptr;
         }
     }
 
@@ -380,6 +386,15 @@ AcDbDatabase* TrinityBuildEngine::buildDwg(const TrinityNeuron& neuron, int dept
     //acutPrintf(_T("\n[BuildEngine] buildDwg loop done, ids.length=%d\n"), (int)ids.length());
 
     if (ids.isEmpty()) {
+        // Пустая коллекция детей означает одно из двух:
+        //   1) у конструкции/проекта НЕТ ни одной связи synapse — сборка
+        //      заведомо неполная (было: молча возвращали nullptr, но если
+        //      файл уже лежал на диске, ensureFileExists считал бы его
+        //      успехом и проект стал бы 'done' без содержимого);
+        //   2) дети есть, но все они были «пустыми» кодами.
+        // В обоих случаях — явная ошибка с диагностикой.
+        acutPrintf(_T("\n[BuildEngine] No children resolved for %ls — treated as FAILURE\n"),
+                   utf8ToWide(neuron.code).c_str());
         delete tempDb;
         return nullptr;
     }
@@ -441,9 +456,9 @@ std::string TrinityBuildEngine::ensureFileExists(const std::string& code, int de
     // Защита от бесконечной рекурсии по глубине (страховка; основной
     // предохранитель от циклов — m_activeCodes ниже).
     if (depth > 20) {
-        wchar_t* wCode = utf2uni(code.c_str());
-        acutPrintf(_T("\n[BuildEngine] MAX DEPTH for %ls\n"), wCode);
-        free(wCode);
+        // Безопасная конвертация UTF-8 -> wide (std::wstring вместо сырого
+        // wchar_t* из utf2uni: не требует free() и не пишет за границу буфера).
+        acutPrintf(_T("\n[BuildEngine] MAX DEPTH for %ls\n"), utf8ToWide(code).c_str());
         return "";
     }
 
@@ -455,10 +470,13 @@ std::string TrinityBuildEngine::ensureFileExists(const std::string& code, int de
     // (в его ids просто не добавится XREF), сборка продолжится.
     // ------------------------------------------------------------
     if (!m_activeCodes.insert(code).second) {
-        wchar_t* wCode = utf2uni(code.c_str());
-        // %ls для wchar_t* (ANSI-printf с wide-аргументом = UB).
-        acutPrintf(_T("\n[BuildEngine] CYCLE DETECTED at %ls (depth=%d) — skipped\n"), wCode, depth);
-        free(wCode);
+        // Цикл в графе — это ОШИБКА ДАННЫХ, а не временный сбой: возврат
+        // пустого пути здесь приводит к провалу всей цепочки родителей и,
+        // в конечном счёте, к markNeuronError проекта (лимит попыток затем
+        // заморозит его в 'error' — см. processAllProjects).
+        // %ls для wchar_t*-аргумента (ANSI-printf с wide-аргументом = UB).
+        acutPrintf(_T("\n[BuildEngine] CYCLE DETECTED at %ls (depth=%d) — build fails\n"),
+                   utf8ToWide(code).c_str(), depth);
         return "";
     }
 
@@ -551,7 +569,53 @@ std::string TrinityBuildEngine::ensureFileExists(const std::string& code, int de
 // достаточно созданного файла проекта (см. примечание в начале файла).
 // Параметр targetDb сохранён в сигнатуре для совместимости с вызывающим
 // кодом (trinityProcess), но внутри не используется.
+//
 // ============================================================
+// МАШИН СОСТОЯНИЙ ПРОЕКТА (защита от бесконечных перезапусков)
+// ============================================================
+// Было: при любой ошибке сборки статус оставался 'pending' → таймер (5 сек)
+// вечно перезапускал заведомо провальную сборку; при частичных ошибках
+// проект всё равно получал 'done' (несовместимо со «стратегией честной
+// сборки» в buildDwg/ensureFileExists).
+//
+// Стало (все переходы выполняются через TrinityCore):
+//
+//   pending / building ──(тик таймера: loadPendingProjects берёт оба)──▶
+//        │ setBuildStatus('building') перед началом сборки
+//        ▼
+//    [сборка ensureFileExists(code)]
+//        │
+//        ├── успех (файл проекта создан, все дети собраны)
+//        │        ▼
+//        │     markNeuronDone: status='done', build_attempts=0, build_error удалён
+//        │     (дальнейших перезапусков нет — 'done' из выборки исключён)
+//        │
+//        └── провал (пустой путь: цикл в графе, битый synapse, ошибка БД,
+//                    отсутствие детей, ошибка wblock/saveDwg)
+//                 ▼
+//              markNeuronError: build_attempts++ и
+//                 attempts < MAX_BUILD_ATTEMPTS → status='pending'  (retry через 5 сек)
+//                 attempts >= MAX_BUILD_ATTEMPTS → status='error'   (ХОП! перезапуски
+//                    прекращаются; возврат в очередь — только ручным сбросом статуса)
+//
+//   Отдельный случай: если сам UPDATE статуса не прошёл (БД недоступна) —
+//   прерываем обработку всей пачки (break): продолжать бессмысленно, т.к.
+//   loadPendingProjects уже вернул данные из живого соединения, а запись
+//   упала — вероятно, соединение умерло в процессе; следующий тик
+//   ensureConnected() переподключится и продолжит очередь.
+//
+// Промежуточный статус 'building' нужен для восстановления после ЖЁСТКИХ
+// отказов (крах AutoCAD/плагина посреди сборки): такой проект останется в
+// 'building' и будет подобран следующим тиком — очередь не зависает.
+// Счётчик попыток при этом НЕ инкрементируется (инкремент только в
+// markNeuronError), поэтому аварийные перезапуски не «съедают» лимит.
+// ============================================================
+
+// Максимальное число автоматических попыток сборки одного проекта.
+// После достижения лимита проект переходит в 'error' и ждёт ручного
+// разбора (см. блок СБРОС СТАТУСА ПРОЕКТА в database.sql).
+static const int MAX_BUILD_ATTEMPTS = 3;
+
 int TrinityBuildEngine::processAllProjects(AcDbDatabase* /*targetDb*/) {
     auto projects = m_core.loadPendingProjects();
     if (projects.empty()) return 0;
@@ -562,6 +626,20 @@ int TrinityBuildEngine::processAllProjects(AcDbDatabase* /*targetDb*/) {
     */
 
     for (auto& proj : projects) {
+        // ------------------------------------------------------------
+        // ШАГ 1. Переводим проект в 'building' ДО начала работы.
+        // Зачем до: если сборка оборвётся аварийно (крах процесса),
+        // проект останется в 'building' и будет подхвачен следующим
+        // тиком (loadPendingProjects выбирает pending+building).
+        // Не удалось записать статус = БД недоступна — прерываем пачку
+        // (continue/обработка остальных проектов невозможна корректно:
+        // финальные статусы тоже не запишутся).
+        // ------------------------------------------------------------
+        if (!m_core.setBuildStatus(proj.id)) {
+            acutPrintf(_T("\n[BuildEngine] DB unavailable, aborting batch\n"));
+            break;
+        }
+
         // Рекурсивно удаляем все файлы, связанные с этим проектом
         // Это гарантирует, что сборка начнётся с чистого листа.
         // ВАЖНО: deleteProjectFiles также вычищает соответствующие записи
@@ -579,23 +657,60 @@ int TrinityBuildEngine::processAllProjects(AcDbDatabase* /*targetDb*/) {
         // кэша), пренебрежимо мала по сравнению с самой сборкой.
         m_builtCache.clear();
 
-        // Создаём файл проекта (рекурсивно; повторные обращения к одним
-        // и тем же кодам внутри этого вызова обслуживаются кэшем)
+        // ------------------------------------------------------------
+        // ШАГ 2. Создаём файл проекта (рекурсивно; повторные обращения
+        // к одним и тем же кодам внутри этого вызова обслуживаются кэшем).
+        // Благодаря «честной сборке» непустой результат означает: файл
+        // проекта существует И все потомки собраны без пропусков.
+        // Пустой результат = провал любой стадии (диагностика уже
+        // напечатана на месте ошибки в рекурсии).
+        // ------------------------------------------------------------
         std::string projectFilePath = ensureFileExists(proj.code, 0);
 
+        // Wide-копия кода проекта для всех логов ниже: один вызов
+        // безопасного конвертера вместо трёх utf2uni+free.
+        const std::wstring wCode = utf8ToWide(proj.code);
+
         if (projectFilePath.empty()) {
-            wchar_t* wCode = utf2uni(proj.code.c_str());
-            acutPrintf(_T("\n[BuildEngine] Failed to create project: %ls\n"), wCode);
-            free(wCode);
+            // --------------------------------------------------------
+            // ШАГ 3a. Провал: фиксируем неудачную ПОПЫТКУ.
+            // markNeuronError увеличит build_attempts и сам решит,
+            // возвращать ли проект в 'pending' или заморозить его в
+            // 'error' (лимит MAX_BUILD_ATTEMPTS). Именно этот шаг
+            // обрывает бесконечные перезапуски каждые 5 секунд.
+            // Мусорный частичный файл проекта (если он всё же успел
+            // появиться) удаляем, чтобы next-проход начал с чистого
+            // листа и fileExists-быстрый путь не принял брак за успех.
+            // --------------------------------------------------------
+            acutPrintf(_T("\n[BuildEngine] Failed to create project: %ls (attempt recorded)\n"), wCode.c_str());
+
+            std::string projPath = m_files.getFilePathForNeuron(proj.code, proj.type);
+            if (!projPath.empty()) _wunlink(utf8ToWide(projPath).c_str());
+
+            if (!m_core.markNeuronError(proj.id, MAX_BUILD_ATTEMPTS,
+                                         "build failed or incomplete (see console log)")) {
+                // Статус не записан (БД отвалилась прямо сейчас) — проект
+                // останется в 'building' и будет перебран тиком позже;
+                // further processing of the batch is pointless.
+                acutPrintf(_T("\n[BuildEngine] Cannot record failure, aborting batch\n"));
+                break;
+            }
             continue;
         }
 
-        // Отмечаем done — файл создан
-        m_core.markNeuronDone(proj.id);
+        // --------------------------------------------------------
+        // ШАГ 3b. Успех: building -> done + сброс счётчика попыток.
+        // Если UPDATE не прошёл (обрыв БД в момент записи), проект
+        // останется в 'building' и будет пересобран следующим тиком —
+        // это безопасно: повторная сборка идемпотентна (deleteProjectFiles
+        // + пересоздание), а ложного 'done' мы не допускаем.
+        // --------------------------------------------------------
+        if (!m_core.markNeuronDone(proj.id)) {
+            acutPrintf(_T("\n[BuildEngine] Project built but cannot mark done: %ls, aborting batch\n"), wCode.c_str());
+            break;
+        }
 
-        wchar_t* wCode = utf2uni(proj.code.c_str());
-        acutPrintf(_T("\n[BuildEngine] Project done: %ls\n"), wCode);
-        free(wCode);
+        acutPrintf(_T("\n[BuildEngine] Project done: %ls\n"), wCode.c_str());
     }
 
     return static_cast<int>(projects.size());
@@ -654,9 +769,7 @@ void TrinityBuildEngine::deleteProjectFiles(const std::string& code) {
         std::wstring pathW = utf8ToWide(filePath);
         if (!pathW.empty()) _wunlink(pathW.c_str());
 
-        wchar_t* wCode = utf2uni(neuron.code.c_str());
-        acutPrintf(_T("\n[BuildEngine] Deleted file: %ls.dwg\n"), wCode);
-        free(wCode);
+        acutPrintf(_T("\n[BuildEngine] Deleted file: %ls.dwg\n"), utf8ToWide(neuron.code).c_str());
     }
 
     // Если это не деталь — рекурсивно удаляем детей

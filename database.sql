@@ -859,12 +859,24 @@ INSERT INTO synapse (parent, child, data) VALUES
 -- ============================================
 -- ПРОЕКТ: PROJ-TEST-001
 -- ============================================
-
+-- Поля жизненного цикла сборки (управляются плагином TrinityBuildEngine):
+--   'status'         — pending -> building -> done | error
+--                      (машина состояний описана в processAllProjects);
+--   'build_attempts' — число НЕудачных попыток сборки подряд; ведёт
+--                      markNeuronError (инкремент), обнуляет markNeuronDone.
+--                      При достижении лимита (MAX_BUILD_ATTEMPTS = 3 в
+--                      TrinityBuildEngine.cpp) проект замораживается в
+--                      'error' — бесконечные перезапуски каждые 5 секунд
+--                      прекращаются. В схеме БД поле НЕ выделяется: оно
+--                      живёт внутри JSON (без ALTER TABLE, т.к. выбирается
+--                      только человеком при разборе, а не индексами).
+--   'build_error'    — текстовая причина последнего провала для диагностики.
 INSERT INTO neuron (pid, type, data) VALUES
 (NULL, 'project', JSON_OBJECT(
     'code', 'PROJ-TEST-001',
     'name', 'Тестовый проект',
     'status', 'pending',
+    'build_attempts', 0,
     'sort', 100
 ));
 SET @project_id = LAST_INSERT_ID();
@@ -890,10 +902,27 @@ INSERT INTO synapse (parent, child, data)
 VALUES (@project_id, @assy_425_id, JSON_OBJECT('pos', JSON_ARRAY(2590, 0, 0), 'rot', JSON_ARRAY(0, 0, 0, 0)));
 
 -- ============================================
--- СБРОС СТАТУСА ПРОЕКТА
+-- СБРОС СТАТУСА ПРОЕКТА (повторная постановка в очередь сборки)
 -- ============================================
+-- Плагин берёт в работу только статусы 'pending' и 'building'
+-- (TrinityCore::loadPendingProjects). Поэтому:
+--   * успешный ('done') или зависший ('building') проект для пересборки
+--     достаточно вернуть в 'pending';
+--   * замороженный после лимита попыток проект имеет статус 'error' —
+--     чтобы он снова собирался, ОДНОВРЕМЕННО с возвратом в 'pending'
+--     ОБЯЗАТЕЛЬНО обнуляйте build_attempts, иначе первая же неудача
+--     вернёт его в 'error' (лимит уже исчерпан);
+--   * build_error удаляется за ненадобностью (старая причина не должна
+--     смешиваться с новой диагностикой).
+-- Запрос идемпотентен: работает для проекта в любом текущем статусе.
 
-UPDATE neuron 
-SET data = JSON_SET(data, '$.status', 'pending')
-WHERE JSON_UNQUOTE(JSON_EXTRACT(data, '$.code')) = 'PROJ-TEST-001';
+UPDATE neuron
+SET data = JSON_REMOVE(
+             JSON_SET(
+               JSON_SET(data, '$.status', 'pending'),
+               '$.build_attempts', 0),
+             '$.build_error')
+WHERE code = 'PROJ-TEST-001';
+-- Примечание: фильтр по `code` — виртуальный столбец с UNIQUE idx_code,
+-- поэтому UPDATE идёт точечным ref-поиском, а не полным сканом таблицы.
 

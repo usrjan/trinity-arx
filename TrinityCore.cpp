@@ -350,6 +350,27 @@ std::vector<TrinitySynapse> TrinityCore::loadChildren(int parentId) {
 // ============================================
 // ЗАГРУЗКА PENDING-ПРОЕКТОВ
 // ============================================
+// Выбираются проекты в двух статусах:
+//   'pending'  — обычная очередь: новые заявки и заявки, чья предыдущая
+//                попытка сборки не увенчалась, но лимит попыток ещё не
+//                исчерпан (см. markNeuronError);
+//   'building' — «зависшие» сборки: проект был помечен как собираемый
+//                (setBuildStatus), но процесс оборвался аварийно до
+//                финального done/error (крах плагина или AutoCAD, обрыв
+//                соединения в момент сборки). Без подхвата таких проектов
+//                они навсегда остались бы в промежуточном статусе.
+//
+// Статусы 'done' и 'error' в выборку НЕ попадают — это ключевой механизм
+// защиты от бесконечных перезапусков: провалившийся после лимита попыток
+// проект больше не перебирается каждые 5 секунд таймером, пока оператор
+// вручную не вернёт ему статус 'pending'.
+//
+// Примечание по индексу: условие по status выражено через полное совпадение
+// с определением генерируемого столбца job_status (COALESCE(...,'pending')
+// здесь сознательно заменён на прямое сравнение — оптимизатор MySQL может
+// использовать idx_job_status_queue для фильтрации по статусу; ORDER BY id
+// идёт по PRIMARY KEY. Для выборок малого размера это не критично, но при
+// разрастании таблицы важно не ломать синтаксис выражения в WHERE.
 std::vector<TrinityNeuron> TrinityCore::loadPendingProjects() {
     std::vector<TrinityNeuron> projects;
     if (!ensureConnected()) return projects;
@@ -364,7 +385,7 @@ std::vector<TrinityNeuron> TrinityCore::loadPendingProjects() {
         "  data "
         "FROM neuron "
         "WHERE type = 'project' "
-        "  AND JSON_UNQUOTE(JSON_EXTRACT(data, '$.status')) = 'pending' "
+        "  AND JSON_UNQUOTE(JSON_EXTRACT(data, '$.status')) IN ('pending', 'building') "
         "  AND is_deleted = 0 "
         "ORDER BY id";
 
@@ -386,17 +407,102 @@ std::vector<TrinityNeuron> TrinityCore::loadPendingProjects() {
 }
 
 // ============================================
+// СМЕНА СТАТУСА ПРОЕКТА (служебный хелпер)
+// ============================================
+// Единая точка записи $.status. Используется для перехода
+// pending -> building (перед началом сборки) и building -> done/error
+// (по её итогам). id приходит из строк БД (atoi), дополнительных
+// пользовательских данных в запросе нет — инъекция невозможна.
+static bool setJsonStatus(MYSQL* mysql, int id, const char* status,
+                          const char* context) {
+    const std::string query =
+        std::string("UPDATE neuron SET data = JSON_SET(data, '$.status', '") +
+        status + "') WHERE id = " + std::to_string(id);
+
+    if (mysql_query(mysql, query.c_str()) != 0) {
+        // Контекст передаётся вызывающей функцией — так сообщение об ошибке
+        // в логе соответствует реальному методу-потребителю.
+        acutPrintf(_T("\n[TrinityCore] %hs failed: %s\n"),
+                   context, mysql_error(mysql));
+        return false;
+    }
+    return true;
+}
+
+// ============================================
+// ПОМЕТИТЬ ПРОЕКТ КАК СОБИРАЕМЫЙ (pending -> building)
+// ============================================
+// Вызывается НЕМЕДЛЕННО перед началом сборки проекта. Если процесс умрёт
+// до выставления финального статуса (done/error), проект останется в
+// 'building' и будет подобран следующим тиком loadPendingProjects() —
+// без зависания очереди. Возвращает false при ошибке БД; вызывающий код
+// трактует это как «прервать обработку пачки» (БД недоступна — смысла
+// продолжать сборку нет, файлы всё равно некуда сохранить по статусу).
+bool TrinityCore::setBuildStatus(int id) {
+    if (!ensureConnected()) return false;
+    return setJsonStatus(m_mysql, id, "building", "setBuildStatus");
+}
+
+// ============================================
 // ОТМЕТКА "DONE"
 // ============================================
+// Успешная сборка: статус 'done' + сброс счётчика попыток build_attempts
+// (если проект позже пересоздадут в 'pending', он начнёт с чистого
+// лимита). JSON_REMOVE убирает и служебную причину последней ошибки —
+// она больше неактуальна.
 bool TrinityCore::markNeuronDone(int id) {
     if (!ensureConnected()) return false;
 
     const std::string query =
-        "UPDATE neuron SET data = JSON_SET(data, '$.status', 'done') WHERE id = "
-        + std::to_string(id);
+        "UPDATE neuron SET data = JSON_REMOVE("
+        "  JSON_SET(JSON_SET(data, '$.status', 'done'), "
+        "           '$.build_attempts', 0), "
+        "  '$.build_error') "
+        "WHERE id = " + std::to_string(id);
 
     if (mysql_query(m_mysql, query.c_str()) != 0) {
         logQueryError("markNeuronDone", query);
+        return false;
+    }
+    return true;
+}
+
+// ============================================
+// ОТМЕТКА О НЕУДАЧНОЙ СБОРКЕ (retry / error)
+// ============================================
+// Реализует экспоненциально затухающую политику перезапусков:
+//   1. build_attempts увеличивается на единицу прямо в JSON
+//      (COALESCE(...,0)+1 — поля может не быть у старых записей);
+//   2. если после инкремента attempts < maxAttempts — проект возвращается
+//      в 'pending' и будет перебран следующим тиком (5 секунд);
+//   3. если attempts >= maxAttempts — статус 'error': loadPendingProjects
+//      его больше не видит, БЕСКОНЕЧНЫЕ ПЕРЕЗАПУСКИ ПРЕКРАЩАЮТСЯ.
+// Причина отказа пишется в $.build_error — оператор увидит её при
+// разборе зависшего проекта.
+//
+// Всё делается одним UPDATE: значение статуса вычисляется тем же
+// выражением CASE, что и только что записанный счётчик, — состояние
+// атомарно и не может «застрять» между двумя запросами.
+//
+// id — числовой из БД; reason экранируется escapeSqlLiteral (может
+// содержать текст ошибок ARX с кавычками/слэшами).
+bool TrinityCore::markNeuronError(int id, int maxAttempts, const std::string& reason) {
+    if (!ensureConnected()) return false;
+    if (maxAttempts < 1) maxAttempts = 1;   // страховка от нуля/отрицательного лимита
+
+    const std::string newAttempts =
+        "(COALESCE(CAST(JSON_EXTRACT(data, '$.build_attempts') AS SIGNED), 0) + 1)";
+
+    const std::string query =
+        "UPDATE neuron SET data = JSON_SET("
+        "  JSON_SET(data, '$.build_attempts', " + newAttempts + "), "
+        "  '$.status', CASE WHEN " + newAttempts + " >= " + std::to_string(maxAttempts) +
+                        " THEN 'error' ELSE 'pending' END, "
+        "  '$.build_error', " + escapeSqlLiteral(reason, /*emptyMeansNull=*/false) + ") "
+        "WHERE id = " + std::to_string(id);
+
+    if (mysql_query(m_mysql, query.c_str()) != 0) {
+        logQueryError("markNeuronError", query);
         return false;
     }
     return true;
