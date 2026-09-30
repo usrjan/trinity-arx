@@ -31,15 +31,18 @@
 //   нейрон : id, code, type, category, material, status, data
 //   синопс : s.id, s.parent, s.child, child_code, s.data
 // Любое изменение порядка = правка парсера в том же коммите.
-// Определения без static — объявлены extern в заголовке; единицы транс-
-// ляции видят одни и те же массивы, sizeof() в объявлениях склеек корре-
-// ктен при компиляции в этой же TU (см. .h).
+// ОПРЕДЕЛЕНИЯ живут только здесь (массивы char[]), наружу торчат
+// указатели «const char* const» (см. объявления extern в .h): sizeof()
+// от неполного типа «extern const char[]» в чужой TU — ошибка C2070,
+// поэтому склейка текстов выполняется рантаймно при инициализации ре-
+// естра (dbRegistry ниже); компилируемый шаблон-склейка удалён именно
+// из-за C2070 в заголовке (см. комментарий к dbRegistry).
 // ------------------------------------------------------------
 
 // Полная карточка нейрона. COALESCE для category/material/status даёт
 // значения по умолчанию прямо на сервере — ровно как в прежних тексто-
 // вых запросах (материал 'PLYWOOD-FSF' — стандарт до assign-этапа).
-const char kNeuronSelectCols[] =
+const char kNeuronSelectColsRaw[] =
     "SELECT id, "
     "  JSON_UNQUOTE(JSON_EXTRACT(data, '$.code')), "
     "  type, "
@@ -47,12 +50,13 @@ const char kNeuronSelectCols[] =
     "  COALESCE(JSON_UNQUOTE(JSON_EXTRACT(data, '$.material')), 'PLYWOOD-FSF'), "
     "  COALESCE(JSON_UNQUOTE(JSON_EXTRACT(data, '$.status')), ''), "
     "  data ";
+const char* const kNeuronSelectCols = kNeuronSelectColsRaw;
 
 // Список для очереди проектов. Отличается от kNeuronSelectCols одним
 // полем: $.status читается БЕЗ COALESCE — проект без статуса в выборку
 // IN ('pending','building') не попадает ни при каком значении по умол-
 // чанию, маскировать NULL пустой строкой смысла нет.
-const char kProjectSelectCols[] =
+const char kProjectSelectColsRaw[] =
     "SELECT id, "
     "  JSON_UNQUOTE(JSON_EXTRACT(data, '$.code')), "
     "  type, "
@@ -60,57 +64,67 @@ const char kProjectSelectCols[] =
     "  COALESCE(JSON_UNQUOTE(JSON_EXTRACT(data, '$.material')), ''), "
     "  JSON_UNQUOTE(JSON_EXTRACT(data, '$.status')), "
     "  data ";
+const char* const kProjectSelectCols = kProjectSelectColsRaw;
 
 // Хвосты FROM/WHERE для запросов по нейрону. Разделены на отдельные
 // константы СПЕЦИАЛЬНО: условие по коду обязано быть посимвольной ко-
 // пией определения виртуального столбца (ради подстановки индексом), а
 // условие по id — обычным равенством первичному ключу. Смешивать их
-// нельзя; каждая склейка фиксируется constexpr-объектом ниже, чтобы
-// результат был готов на этапе компиляции (без heap и рантайм-копий).
+// нельзя; тексты собираются из них один раз при инициализации реестра
+// (см. dbRegistry ниже) — без дублирования списков столбцов по TU.
 
 // -- «по бизнес-коду»: форма = определение neuron.code (database.sql) --
-const char kWhereByCode[] =
+const char kWhereByCodeRaw[] =
     "FROM neuron "
     "WHERE JSON_UNQUOTE(JSON_EXTRACT(data, '$.code')) = ? "
     "  AND is_deleted = 0 "
     "LIMIT 1";
+const char* const kWhereByCode = kWhereByCodeRaw;
 
 // -- «по числовому id»: обслуживается PRIMARY KEY --
-const char kWhereById[] =
+const char kWhereByIdRaw[] =
     "FROM neuron WHERE id = ? AND is_deleted = 0";
+const char* const kWhereById = kWhereByIdRaw;
 
 // -- очередь сборки: фильтр по type + статусам pending/building --
-const char kPendingProjectsTail[] =
+const char kPendingProjectsTailRaw[] =
     "FROM neuron "
     "WHERE type = 'project' "
     "  AND JSON_UNQUOTE(JSON_EXTRACT(data, '$.status')) IN ('pending', 'building') "
     "  AND is_deleted = 0 "
     "ORDER BY id";
+const char* const kPendingProjectsTail = kPendingProjectsTailRaw;
 
-// ------------------------------------------------------------
-// Инстансы компилируемых склеек. constinit запрещает динамическую ini-
-// тialization: объекты ложатся в статическую область модуля целиком, а
-// constexpr-конструктор выполняется компилятором. buf живёт всё время
-// жизни процесса — указатели на него свободно хранятся в реестре.
-// ------------------------------------------------------------
-constinit const SqlConcat<TagNeuronByCode, sizeof(kNeuronSelectCols), sizeof(kWhereByCode)>
-    sqlNeuronByCode(kNeuronSelectCols, kWhereByCode);
-
-constinit const SqlConcat<TagNeuronById, sizeof(kNeuronSelectCols), sizeof(kWhereById)>
-    sqlNeuronById(kNeuronSelectCols, kWhereById);
-
-constinit const SqlConcat<TagPendingProjects, sizeof(kProjectSelectCols), sizeof(kPendingProjectsTail)>
-    sqlPendingProjects(kProjectSelectCols, kPendingProjectsTail);
-
-// ------------------------------------------------------------
 // Реестр запросов. Индекс массива = значение enum DbQuery
 // (порядок элементов ОБЯЗАТЕЛЬНО соответствует перечислению!).
 // Типы параметров перечислены в том же порядке, что '?' в SQL.
+// Тексты NeuronByCode / NeuronById / PendingProjects собираются из об-
+// щих фрагментов (k...SelectCols + хвосты WHERE) ОДИН РАЗ при первой
+// инициализации реестра — так списки столбцов существуют в единствен-
+// ном экземпляре без дублирования по методам ядра. Прежняя компилируе-
+// мая склейка (шаблон SqlConcat + sizeof extern-массивов) УДАЛЕНА:
+// sizeof от неполного типа «const char[]» вне TU-определения — фаталь-
+// ная ошибка MSVC C2070 в каждой TU, включающей заголовок TrinityDb-
+// Statements.h. Рантайм-склейка здесь ничуть не дороже (выполняется од-
+// нократно, до первого PREPARE), а хрупкость компилируемого шаблона ис-
+// чезает.
 // ------------------------------------------------------------
 const DbQueryDef* dbRegistry() {
-    // Magic static: инициализация выполнится ровно один раз, при первом
-    // обращении из кода ядра (после DllMain) — порядок статической ини-
-    // циализации модуля ARX больше ни на что не влияет.
+    // Magic static: каждый объект ниже инициализируется ровно один раз
+    // при первом обращении из кода ядра (после DllMain) — порядок стати-
+    // ческой инициализации модуля ARX больше ни на что не влияет. Все
+    // объекты живут в статической области до конца процесса, поэтому
+    // указатели .c_str(), сохранённые в defs[], остаются валидными все-
+    // гда. ВАЖНО: строки s_sql* объявлены ДО defs[] — внутри одного
+    // magic-static блока они гарантированно сконструированы раньше, чем
+    // реестр начнёт читать их адреса.
+    static const std::string s_sqlNeuronByCode =
+        std::string(kNeuronSelectCols) + kWhereByCode;
+    static const std::string s_sqlNeuronById =
+        std::string(kNeuronSelectCols) + kWhereById;
+    static const std::string s_sqlPendingProjects =
+        std::string(kProjectSelectCols) + kPendingProjectsTail;
+
     static const DbQueryDef defs[static_cast<size_t>(DbQuery::Count)] = {
 
         // ---- VerifyCodeIndex ------------------------------------------------
@@ -139,7 +153,7 @@ const DbQueryDef* dbRegistry() {
         // лютно безопасны (бинарный протокол, никакого экранирования).
         {
             "loadNeuronByCode",
-            sqlNeuronByCode.buf,
+            s_sqlNeuronByCode.c_str(),
             { MYSQL_TYPE_STRING },
             /*returnsResult=*/true
         },
@@ -149,7 +163,7 @@ const DbQueryDef* dbRegistry() {
         // Тот же список столбцов, что у NeuronByCode, — тот же парсер строки.
         {
             "loadNeuronById",
-            sqlNeuronById.buf,
+            s_sqlNeuronById.c_str(),
             { MYSQL_TYPE_LONGLONG },
             /*returnsResult=*/true
         },
@@ -182,7 +196,7 @@ const DbQueryDef* dbRegistry() {
         // id идёт по PRIMARY KEY (FIFO-порядок обработки).
         {
             "loadPendingProjects",
-            sqlPendingProjects.buf,
+            s_sqlPendingProjects.c_str(),
             { /* нет параметров */ },
             /*returnsResult=*/true
         },
