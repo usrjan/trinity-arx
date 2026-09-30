@@ -49,6 +49,23 @@ public:
         AcDbDatabase* targetDb
     );
 
+    // «Лёгкая» проверка: является ли уже существующий блок в целевой базе
+    // XREF-ссылкой ровно на данный файл (тот же путь после нормализации).
+    // Нужна для логики «не пересобирать то, что уже есть»: если деталь или
+    // конструкция уже представлена в собираемой базе корректной ссылкой,
+    // её не рисуют заново — существующая запись переиспользуется.
+    // Блок должен существовать в pTargetDb (проверяется has()).
+    static bool blockMatchesXrefPath(AcDbDatabase* pTargetDb,
+                                     const std::wstring& blockNameW,
+                                     const std::string& pathUtf8);
+
+    // Сравнение двух путей как канонических Windows-путей без учёта
+    // регистра и стиля разделителей ('C:\a\B.dwg' == 'c:/a/b.dwg').
+    // Wide-перегрузка — основная; string-версия принимает UTF-8 пути
+    // (формат нашего конфига/БД) и конвертирует сама.
+    static bool sameNormalizedPath(const std::wstring& a, const std::wstring& b);
+    static bool sameNormalizedPath(const std::string& aUtf8, const std::string& bUtf8);
+
     std::string detailsDir() const { return "details"; }
     std::string assembliesDir() const { return "assemblies"; }
     std::string projectsDir() const { return "projects"; }

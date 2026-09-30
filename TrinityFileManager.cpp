@@ -159,6 +159,72 @@ std::string TrinityFileManager::getFilePathForNeuron(const std::string& code, co
     return getFilePath(code, subdirForType(type));
 }
 
+// ============================================================
+// НОРМАЛИЗАЦИЯ ПУТИ ДЛЯ СРАВНЕНИЯ (Windows)
+// ============================================================
+// Один и тот же файл описывается бесчисленным числом строк: 'C:\a\b.dwg',
+// 'c:/a/b.dwg', '\\?\C:\a\./b.dwg', с регистром букв где угодно. AutoCAD
+// хранит в записи XREF путь в своей форме (относительный/полный, слэши),
+// наш конфиг даёт свою. Прямое сравнение строк давало бы ложное «нет» и
+// лишнюю пересборку. Поэтому перед сравнением обе строки приводятся к
+// канонической форме:
+//   - GetFullPathNameW — разворачивает относительные пути, схлопывает
+//     '.'/'..', сводит '/' к '\', убирает хвостовые точки/пробелы;
+//   - приведение регистра к нижнему (NTFS/том Windows case-insensitive).
+bool TrinityFileManager::sameNormalizedPath(const std::wstring& a, const std::wstring& b) {
+    auto normalize = [](const std::wstring& w) -> std::wstring {
+        if (w.empty()) return w;
+        wchar_t buf[4096];
+        DWORD n = GetFullPathNameW(w.c_str(), _countof(buf), buf, nullptr);
+        // При переполнении буфера или ошибке используем исходную строку:
+        // сравнение станет более строгим, но не ложно-положительным.
+        std::wstring full = (n > 0 && n < _countof(buf)) ? std::wstring(buf, n) : w;
+        for (auto& ch : full) ch = static_cast<wchar_t>(towlower(ch));
+        return full;
+    };
+    const std::wstring wa = normalize(a);
+    const std::wstring wb = normalize(b);
+    return !wa.empty() && wa == wb;
+}
+
+// UTF-8 обёртка для вызывающих, оперирующих ANSI-путями (наш конфиг/БД).
+bool TrinityFileManager::sameNormalizedPath(const std::string& aUtf8, const std::string& bUtf8) {
+    return sameNormalizedPath(utf8ToWide(aUtf8), utf8ToWide(bUtf8));
+}
+
+// См. объявление в TrinityFileManager.h — проверка «блок уже есть и это
+// ссылка на нужный файл». Использует только документированный API:
+// AcDbBlockTable::has()/getAt(kForRead), AcDbBlockTableRecord::
+// isFromExternalReference()/pathName(AcString&). Никаких модификаций БД
+// не делает — безопасна при открытой на запись Model Space у вызывающего.
+bool TrinityFileManager::blockMatchesXrefPath(AcDbDatabase* pTargetDb,
+                                              const std::wstring& blockNameW,
+                                              const std::string& pathUtf8) {
+    if (!pTargetDb || blockNameW.empty() || pathUtf8.empty()) return false;
+
+    AcDbBlockTable* pBT = nullptr;
+    if (pTargetDb->getSymbolTable(pBT, AcDb::kForRead) != Acad::eOk) return false;
+
+    bool matches = false;
+    AcDbBlockTableRecord* pRec = nullptr;
+    if (pBT->has(blockNameW.c_str()) &&
+        pBT->getAt(blockNameW.c_str(), pRec, AcDb::kForRead) == Acad::eOk && pRec) {
+        if (pRec->isFromExternalReference()) {
+            AcString recPath;
+            if (pRec->pathName(recPath) == Acad::eOk) {
+                // Сравниваем широкие нормализованные пути напрямую —
+                // обратная конвертация в UTF-8 не нужна (был бы вызов
+                // несуществующего wideToUtf8() и лишний round-trip).
+                std::wstring recW(recPath.kwszPtr());
+                matches = sameNormalizedPath(utf8ToWide(pathUtf8), recW);
+            }
+        }
+        pRec->close();
+    }
+    pBT->close();
+    return matches;
+}
+
 
 AcDbDatabase* TrinityFileManager::createEmptyDwg() {
     return new AcDbDatabase(Adesk::kTrue, Adesk::kTrue);
@@ -217,7 +283,14 @@ AcDbObjectId TrinityFileManager::attachXref(
     AcDbObjectId blockId = AcDbObjectId::kNull;
     bool wasInserted = false;
 
-    // Шаг 1: Проверяем, есть ли блок уже в таблице
+    // Шаг 1: Проверяем, есть ли блок уже в таблице.
+    // ИЗМЕНЁННАЯ ЛОГИКА (по требованию заказчика): «если деталь или
+    // конструкция существует — не рисуем заново, а просто добавляем».
+    // Существующий корректный XREF-блок переиспользуется как есть;
+    // удаление и повторная вставка делаются ТОЛЬКО когда записанный в
+    // блоке путь больше не совпадает с запрашиваемым файлом (файл
+    // перемещён/подменён) либо вовсе отсутствует на диске. Сравнение
+    // путей — через sameNormalizedPath (регистр/слэши/относительность).
     AcDbBlockTable* pBlockTable = nullptr;
     Acad::ErrorStatus es = targetDb->getSymbolTable(pBlockTable, AcDb::kForRead);
     if (es == Acad::eOk) {
@@ -232,18 +305,35 @@ AcDbObjectId TrinityFileManager::attachXref(
                 // ветки удаления устаревшего XREF ниже.
                 const AcDbObjectId recId = pBlockRec->objectId();
 
-                // Если это XREF — проверяем, существует ли файл
+                // Если это XREF — проверяем, на какой файл он ссылается
                 if (pBlockRec->isFromExternalReference()) {
                     // Получаем путь к внешнему файлу через AcString
                     AcString xrefPath;
                     Acad::ErrorStatus pathEs = pBlockRec->pathName(xrefPath);
 
-                    bool fileExists = false;
+                    // Три состояния вместо прежних двух:
+                    //  - ссылка ведёт ровно на нужный файл -> переиспользуем;
+                    //  - файл по записанному пути пропал или путь другой
+                    //    -> устаревший блок, удаляем и вставляем заново;
+                    //  - путь прочитать не удалось -> считаем устаревшим
+                    //    (консервативно), но НЕ удаляем вслепую: пусть
+                    //    шаг 2 попробует insert и обработает eDuplicateKey.
+                    bool sameFile = false;
+                    bool stale = false;
                     if (pathEs == Acad::eOk) {
-                        fileExists = (_waccess(xrefPath.kwszPtr(), 0) == 0);
+                        const std::wstring recW(xrefPath.kwszPtr());
+                        // Тот же нормализованный путь?
+                        sameFile = sameNormalizedPath(pathW, recW);
+                        if (!sameFile) {
+                            // Другой путь: если файла по нему всё равно нет —
+                            // точно устаревшая («битая») ссылка.
+                            stale = (_waccess(recW.c_str(), 0) != 0);
+                        }
+                    } else {
+                        stale = true;
                     }
 
-                    if (!fileExists) {
+                    if (!sameFile && stale) {
                         // Файл удалён — нужно удалить старый блок и вставить заново.
                         // ВАЖНО (фикс игнорирования ошибок API): раньше здесь
                         // вызывался pBlockTable->upgradeOpen() без проверки
