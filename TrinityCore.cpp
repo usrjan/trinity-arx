@@ -386,14 +386,14 @@ void TrinityCore::logQueryError(const char* context, const std::string& query) {
 // Любая «оптимизация» вида data->>'$.code', JSON_VALUE(...) или
 // UPPER(...) сломает match и вернёт полный скан таблицы.
 // Проверка плана: EXPLAIN SELECT ... (ожидается key=idx_code).
-TrinityNeuron* TrinityCore::loadNeuronByCode(const std::string& code) {
-    if (!ensureConnected()) return nullptr;
+std::optional<TrinityNeuron> TrinityCore::loadNeuronByCode(const std::string& code) {
+    if (!ensureConnected()) return std::nullopt;
 
     // Пустой код — заведомо отсутствующая сущность: нейроны без $.code
     // имеют NULL в виртуальном столбце, а сравнение '= '\'\'' в индексе
     // ничего не найдёт. Раньше такой запрос всё равно уходил на сервер
     // (сетевой RTT + парсинг) при каждом рекурсивном вызове сборки.
-    if (code.empty()) return nullptr;
+    if (code.empty()) return std::nullopt;
 
     const std::string query =
         "SELECT id, "
@@ -410,17 +410,19 @@ TrinityNeuron* TrinityCore::loadNeuronByCode(const std::string& code) {
 
     if (mysql_query(m_mysql, query.c_str()) != 0) {
         logQueryError("loadNeuron", query);
-        return nullptr;
+        return std::nullopt;
     }
 
     MYSQL_RES* result = mysql_store_result(m_mysql);
     if (!result || mysql_num_rows(result) == 0) {
         if (result) mysql_free_result(result);
-        return nullptr;
+        return std::nullopt;
     }
 
     MYSQL_ROW row = mysql_fetch_row(result);
-    TrinityNeuron* neuron = new TrinityNeuron(parseNeuronRow(row));
+    // Значение копируется в optional по значению — сырой указатель наружу
+    // не выходит, delete вызывающему коду не нужен (утечка исключена).
+    std::optional<TrinityNeuron> neuron = parseNeuronRow(row);
     mysql_free_result(result);
     return neuron;
 }
@@ -428,8 +430,8 @@ TrinityNeuron* TrinityCore::loadNeuronByCode(const std::string& code) {
 // ============================================
 // ЗАГРУЗКА НЕЙРОНА ПО ID
 // ============================================
-TrinityNeuron* TrinityCore::loadNeuronById(int id) {
-    if (!ensureConnected()) return nullptr;
+std::optional<TrinityNeuron> TrinityCore::loadNeuronById(int id) {
+    if (!ensureConnected()) return std::nullopt;
 
     const std::string query =
         "SELECT id, "
@@ -443,17 +445,19 @@ TrinityNeuron* TrinityCore::loadNeuronById(int id) {
 
     if (mysql_query(m_mysql, query.c_str()) != 0) {
         logQueryError("loadNeuron", query);
-        return nullptr;
+        return std::nullopt;
     }
 
     MYSQL_RES* result = mysql_store_result(m_mysql);
     if (!result || mysql_num_rows(result) == 0) {
         if (result) mysql_free_result(result);
-        return nullptr;
+        return std::nullopt;
     }
 
     MYSQL_ROW row = mysql_fetch_row(result);
-    TrinityNeuron* neuron = new TrinityNeuron(parseNeuronRow(row));
+    // Значение копируется в optional по значению — сырой указатель наружу
+    // не выходит, delete вызывающему коду не нужен (утечка исключена).
+    std::optional<TrinityNeuron> neuron = parseNeuronRow(row);
     mysql_free_result(result);
     return neuron;
 }

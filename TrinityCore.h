@@ -3,6 +3,7 @@
 #include "StdAfx.h"
 #include <atomic>   // std::atomic — состояние купола доступности БД (TrinityDbBreaker)
 #include <array>    // std::array — реестр prepared statements (m_stmts)
+#include <optional> // std::optional — безопасный возврат «значение или отсутствие» вместо сырых указателей new
 #include <string>   // std::string — поля структур нейрона, параметры подключения
 #include <vector>   // std::vector — DbParam, наборы результатов запросов
 #include "TrinityDbStatements.h"   // DbQuery, StmtGuard — реестр prepared statements
@@ -307,8 +308,12 @@ public:
     // Поиск по бизнес-коду (D.S.0.425.850.10 / PROJ-TEST-001). Опирается на
     // виртуальный столбец neuron.code + UNIQUE KEY idx_code — см. комментарии
     // к реализации в TrinityCore.cpp. Вызывается рекурсивно при сборке DWG.
-    TrinityNeuron* loadNeuronByCode(const std::string& code);
-    TrinityNeuron* loadNeuronById(int id);
+    // Возвращают std::optional: карточка нейрона копируется по значению,
+    // вызывающий код не получает сырой указатель и не обязан помнить про
+    // delete (раньше «забытый delete» = утечка, двойной delete = UB).
+    // Пустой optional = запись не найдена или ошибка БД/соединения.
+    std::optional<TrinityNeuron> loadNeuronByCode(const std::string& code);
+    std::optional<TrinityNeuron> loadNeuronById(int id);
 
     // Связи
     std::vector<TrinitySynapse> loadChildren(int parentId);
