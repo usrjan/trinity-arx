@@ -299,11 +299,6 @@ AcDbDatabase* TrinityBuildEngine::buildDetail(const TrinityNeuron& detail) {
 
     pMs2->close();
 
-    // Финальный отчёт (отключён; при включении — utf8ToWide + %ls:
-    // %s для wchar_t* = UB, а utf2uni возвращает сырой malloc-буфер,
-    // требующий free()).
-    // acutPrintf(_T("\n[BuildEngine] Detail built: %ls\n"), utf8ToWide(detail.code).c_str());
-
     return cleanDb;
 }
 
@@ -330,15 +325,8 @@ AcDbDatabase* TrinityBuildEngine::buildDwg(const TrinityNeuron& neuron, int dept
 
     auto children = m_core.loadChildren(neuron.id);
 
-    // Отладочный лог отключён по умолчанию; при включении — только
-    // utf8ToWide() (безопасная конвертация, std::wstring), без utf2uni/free.
-    // acutPrintf(_T("\n[BuildEngine] Building %ls: %d children (depth=%d)\n"),
-    //     utf8ToWide(neuron.code).c_str(), static_cast<int>(children.size()), depth);
-
     for (auto& syn : children) {
         AcGePoint3d childPos = syn.position.toAcGe();
-
-        // (отладочный лог ребёнка отключён; при включении — utf8ToWide())
 
         std::string childFilePath = ensureFileExists(syn.childCode, depth + 1);
         if (childFilePath.empty()) {
@@ -358,15 +346,12 @@ AcDbDatabase* TrinityBuildEngine::buildDwg(const TrinityNeuron& neuron, int dept
             return nullptr;
         }
 
-        //acutPrintf(_T("\n[BuildEngine] Got file path, attaching XREF...\n"));
-
         // НЕ держим Model Space открытым — attachXref сам его откроет
         AcDbObjectId childId = m_files.attachXref(
             childFilePath, syn.childCode, childPos, syn.rotation, tempDb);
 
         if (childId != AcDbObjectId::kNull) {
             ids.append(childId);
-            //acutPrintf(_T("\n[BuildEngine] XREF appended to ids\n"));
         }
         else {
             // Файл ребёнка есть, но вставить его не удалось (битый DWG,
@@ -378,12 +363,6 @@ AcDbDatabase* TrinityBuildEngine::buildDwg(const TrinityNeuron& neuron, int dept
             return nullptr;
         }
     }
-
-    // Получаем Model Space ТОЛЬКО ПОСЛЕ цикла, для закрытия
-    // Или вообще не открываем его — wblock сам разберётся
-    // (мы не добавляли ничего вручную в Model Space, только через attachXref)
-
-    //acutPrintf(_T("\n[BuildEngine] buildDwg loop done, ids.length=%d\n"), (int)ids.length());
 
     if (ids.isEmpty()) {
         // Пустая коллекция детей означает одно из двух:
@@ -533,8 +512,6 @@ std::string TrinityBuildEngine::ensureFileExists(const std::string& code, int de
     // Защита от бесконечной рекурсии по глубине (страховка; основной
     // предохранитель от циклов — m_activeCodes ниже).
     if (depth > 20) {
-        // Безопасная конвертация UTF-8 -> wide (std::wstring вместо сырого
-        // wchar_t* из utf2uni: не требует free() и не пишет за границу буфера).
         acutPrintf(_T("\n[BuildEngine] MAX DEPTH for %ls\n"), utf8ToWide(code).c_str());
         return "";
     }
@@ -810,7 +787,7 @@ int TrinityBuildEngine::processAllProjectsInternal(int budgetMs) {
         std::string projectFilePath = ensureFileExists(proj.code, 0);
 
         // Wide-копия кода проекта для всех логов ниже: один вызов
-        // безопасного конвертера вместо трёх utf2uni+free.
+        // конвертера вместо трёх повторных.
         const std::wstring wCode = utf8ToWide(proj.code);
 
         if (projectFilePath.empty()) {

@@ -51,7 +51,9 @@
       <PreprocessorDefinitions>RADPACK;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <PrecompiledHeader>Use</PrecompiledHeader>
       <PrecompiledHeaderFile>stdafx.h</PrecompiledHeaderFile>
-      <LanguageStandard>Default</LanguageStandard>
+      <!-- C++17 обязателен: код использует std::optional (TrinityCore.h).
+           "Default" (= C++14) ломает сборку Debug: STL4038 + C2039 "optional". -->
+      <LanguageStandard>stdcpp17</LanguageStandard>
       <AdditionalOptions>/Zc:__cplusplus %(AdditionalOptions)</AdditionalOptions>
       <AdditionalUsingDirectories>D:\devel\ObjectARX\inc-x64;%(AdditionalUsingDirectories)</AdditionalUsingDirectories>
     </ClCompile>
