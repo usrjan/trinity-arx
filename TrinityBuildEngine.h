@@ -9,14 +9,12 @@ private:
     TrinityCore m_core;
     TrinityFileManager m_files;
 
-    // Рекурсивное обеспечение существования DWG
-    // Если файл есть — вставляет XREF и возвращает его ID
-    // Если файла нет — строит его и потом вставляет XREF
-    AcDbObjectId ensureExists(const std::string& code,
-                               const AcGePoint3d& position,
-                               const TrinityRotationCompound& rotation,
-                               AcDbDatabase* targetDb,
-                               int depth = 0);
+    // Примечание: вставка готового DWG проекта в текущий чертёж не
+    // выполняется (ensureExists удалён как мёртвый код, реализованная
+    // вместо него insertProjectToTarget вызывала ошибку 320 при работе
+    // с активным документом и убрана). Результат сборки — файлы DWG
+    // на диске; attachXref используется только внутри buildDwg для
+    // вставки детей во временную базу.
 
     // Построить DWG конструкции/проекта из детей
     // Дети вставляются как XREF во временную базу,
@@ -34,6 +32,14 @@ private:
 
     // Рекурсивное удаление файлов проекта и всех его детей
     void deleteProjectFiles(const std::string& code);
+
+    // Гарантирует существование родительской директории файла (UTF-8 путь).
+    // Нужен перед saveDwg: промежуточные папки могут отсутствовать,
+    // а путь может содержать кириллицу (создаётся через _wmkdir).
+    bool ensureDirectoryForFile(const std::string& filePathUtf8) {
+        return TrinityFileManager::createDirectoryRecursiveA(
+                   TrinityFileManager::parentDir(filePathUtf8));
+    }
 
 public:
     TrinityBuildEngine(const std::string& basePath) : m_files(basePath) {}

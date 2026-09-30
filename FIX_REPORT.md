@@ -103,7 +103,7 @@ for (auto& proj : projects) {
 
 1. **Первый запуск:**
    ```
-   TSTART →等待 5 сек → TSTOP
+   TSTART → выждать 5 сек → TSTOP
    ```
 
 2. **Сброс и повтор:**
@@ -111,7 +111,7 @@ for (auto& proj : projects) {
    - В БД: `UPDATE neuron SET data = JSON_SET(data, '$.status', 'pending') WHERE ...`
    - Выполнить:
      ```
-     TSTART →等待 5 сек → TSTOP
+     TSTART → выждать 5 сек → TSTOP
      ```
    - Повторить 3-5 раз
 
@@ -119,32 +119,22 @@ for (auto& proj : projects) {
    - Запустить Process Explorer или аналогичный инструмент
    - Проверить память процесса acad.exe между циклами TSTART/TSTOP
 
-## Дополнительные улучшения (опционально)
+## Дополнительные улучшения — СТАТУС ВЫПОЛНЕНИЯ
 
-### A. Добавить логирование
-```cpp
-// В начале processAllProjects()
-acutPrintf(_T("\n[BuildEngine] === Starting project build ===\n"));
-acutPrintf(_T("[BuildEngine] Projects to process: %d\n"), projects.size());
-```
+### A. Логирование — ЧАСТИЧНО
+Логирование ошибок сборки (`wblock failed`, `saveAs failed`, `mkdir failed`)
+реализовано через `acutPrintf` в `TrinityBuildEngine.cpp` / `TrinityFileManager.cpp`.
+Для wchar_t-строк используется `%ls` (не `%s`). Общий заголовок вида
+"=== Starting project build ===" в `processAllProjects()` не добавлен.
 
-### B. Добавить защиту от зависания
-```cpp
-// В TimerProc добавить флаг выполнения
-static bool g_isProcessing = false;
-if (g_isProcessing) return;  // Пропускаем тик
-g_isProcessing = true;
-trinityProcess();
-g_isProcessing = false;
-```
+### B. Защита от зависания — ВЫПОЛНЕНО
+Флаг `g_isProcessing` реализован в `TrinityCommands.cpp` (внутри `trinityProcess()`,
+строки ~110–121): повторяющийся тик пропускается, пока идёт долгая сборка.
 
-### C. Очистка при выгрузке плагина
-```cpp
-// В unloadApp() добавить
-delete g_engine;
-g_engine = nullptr;
-g_timerId = 0;
-```
+### C. Очистка при выгрузке плагина — ЧАСТИЧНО
+`unloadApp()` (`acrxEntry.cpp`) вызывает `trinityStop()` и снимает группу команд.
+Явного `delete g_engine` там нет — движок освобождается в `trinityStart()`
+перед созданием нового экземпляра (см. раздел «Утечка памяти» выше).
 
 ## Статус
 ✅ Все критические исправления применены
@@ -206,3 +196,50 @@ g_timerId = 0;
 ## Статус
 ✅ Таймер работает строго под write-lock активного документа
 ✅ Протокол document locking ObjectARX 2026 соблюдён
+
+---
+
+# Обновление документации (актуальный статус кода)
+
+Раздел «Фикс №1» местами описывал код, который впоследствии был изменён.
+Ниже — сверка с текущим состоянием репозитория:
+
+| Утверждение из Фикса №1 | Текущее состояние |
+|---|---|
+| `deleteProjectFiles()` вызывается перед сборкой pending-проекта | ✅ Актуально (`TrinityBuildEngine::processAllProjects`) |
+| Проверки `isFromExternalReference()` / `externalReferenceId()` в `attachXref` | ✅ Актуально (`TrinityFileManager.cpp`) |
+| `#include <io.h>` для `_wunlink` | ⚠️ Изменено: `<io.h>` и `<direct.h>` теперь подключаются только через `StdAfx.h`; локальные дубли убраны. Для удаления файлов используется `_wunlink` с UTF-8→wide путём (`utf8ToWide`) |
+| Вставка готового проекта в активный чертёж | ❌ Удалено: метод `insertProjectToTarget()` убран вместе с вызовом (ошибка 320 `eWasOpenForWrite` при записи из таймера). Результат сборки — файлы DWG на диске |
+| Метод `ensureExists()` | ❌ Удалён как мёртвый код; его функциональность покрывает `ensureFileExists()` |
+
+Дополнительно с момента Фикса №1/№2 в коде выполнены:
+
+- **Безопасное освобождение после `wblock`:** ветки `es != Acad::eOk` и `!cleanDb`
+  разделены, слепой `delete cleanDb` при ошибке убран (риск двойного free).
+- **Пути:** рекурсивное создание каталогов `createDirectoryRecursiveA/W`
+  (`_wmkdir`, поддержка UNC, идемпотентность), кириллические пути через UTF-8→wide;
+  ANSI `_mkdir/_access` не используются.
+- **Санитизация имён:** `sanitizeFileName()` в `getFilePath()`/`attachXref()`
+  (запрещённые символы, path traversal, усечение по границе UTF-8).
+- **Парсинг JSON массива `holes`:** устранён бесконечный цикл (поэлементный обход
+  с границами объекта вместо глобального поиска ключей).
+- **Вывод строк:** все `acutPrintf` с `wchar_t*` используют `%ls`.
+- **Стиль:** `nullptr` вместо NULL для указателей, `true/false` в setter-ах атрибутов
+  (bool-API), убраны дублирующиеся `#include`, три копии логики путей сведены к
+  `subdirForType()/getFilePathForNeuron()`, четыре реализации создания слоёв —
+  к `TrinityLayerManager::createOrGetLayerByName()`.
+- **Конвертация:** новый безопасный `utf8ToWide()` в `StdAfx`; `stringToWide()`
+  помечена `[[deprecated]]`.
+- **Переподключение к MySQL (`TrinityCore`):** соединение больше не создаётся
+  один раз «навсегда». Новый метод `ensureConnected()` вызывается перед каждой
+  операцией с БД: `mysql_ping()` проверяет живость, при обрыве (коды 2006/2013/2003,
+  серверный `wait_timeout`, потеря сети) выполняется автоматическое переподключение
+  с сохранёнными параметрами `connect()`. В `connect()` добавлены таймауты
+  `MYSQL_OPT_CONNECT_TIMEOUT` (5 с) и `MYSQL_OPT_READ_TIMEOUT` (15 с), чтобы
+  блокирующий TCP-запрос не подвешивал поток таймера AutoCAD. Ошибки
+  `mysql_query` больше не проглатываются молча — `logQueryError()` выводит код,
+  текст ошибки и фрагмент запроса в консоль. Это устраняет «тихий сбой таймера»,
+  при котором после разрыва соединения `loadPendingProjects()` возвращал пустой
+  список и сборка бесконечно тикала без каких-либо сообщений.
+
+Зарегистрированные команды AutoCAD: `TSTART` / `TSTOP` (см. `acrxEntry.cpp`).

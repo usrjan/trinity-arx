@@ -1,6 +1,7 @@
 // TrinityAttributeBuilder.cpp
 #include "StdAfx.h"
 #include "TrinityAttributeBuilder.h"
+#include "TrinityLayerManager.h"
 
 // ============================================
 // ДОБАВИТЬ АТРИБУТ С КОДОМ ДЕТАЛИ
@@ -11,13 +12,15 @@ AcDbObjectId TrinityAttributeBuilder::addDetailCode(
 
     if (!pRecord || code.empty()) return AcDbObjectId::kNull;
 
-    wchar_t codeW[256];
-    MultiByteToWideChar(CP_UTF8, 0, code.c_str(), -1, codeW, 256);
+    // Фикс AV: точный размер вместо wchar_t[256], остававшегося
+    // неинициализированным при переполнении буфера.
+    std::wstring codeW = utf8ToWide(code);
+    if (codeW.empty()) return AcDbObjectId::kNull;
 
     AcDbAttributeDefinition* pAttdef = new AcDbAttributeDefinition();
 
     pAttdef->setPosition(AcGePoint3d::kOrigin);
-    pAttdef->setTextString(codeW);
+    pAttdef->setTextString(codeW.c_str());
     pAttdef->setTag(_T("DETAIL_CODE"));
     pAttdef->setPrompt(_T("Detail Code"));
     pAttdef->setHeight(30);
@@ -26,10 +29,10 @@ AcDbObjectId TrinityAttributeBuilder::addDetailCode(
     pAttdef->setVerticalMode(AcDb::kTextTop);
     pAttdef->setWidthFactor(0.75);
     pAttdef->setFieldLength(50);
-    pAttdef->setInvisible(Adesk::kTrue);
-    pAttdef->setConstant(Adesk::kTrue);
-    pAttdef->setVerifiable(Adesk::kFalse);
-    pAttdef->setPreset(Adesk::kFalse);
+    pAttdef->setInvisible(true);
+    pAttdef->setConstant(true);
+    pAttdef->setVerifiable(false);
+    pAttdef->setPreset(false);
 
     pAttdef->setLayer(_T("_tag"));
 
@@ -41,29 +44,9 @@ AcDbObjectId TrinityAttributeBuilder::addDetailCode(
 }
 
 // ============================================
-// СЛОЙ _tag
+// СЛОЙ _tag — делегирован в TrinityLayerManager
+// (раньше здесь была третья копия цикла LayerTable has/add)
 // ============================================
 void TrinityAttributeBuilder::ensureTagLayer(AcDbDatabase* db) {
-    if (!db) return;
-
-    AcDbLayerTable* pLayerTable = nullptr;
-    Acad::ErrorStatus es = db->getSymbolTable(pLayerTable, AcDb::kForWrite);
-    if (es != Acad::eOk) return;
-
-    if (!pLayerTable->has(_T("_tag"))) {
-        AcDbLayerTableRecord* pRecord = new AcDbLayerTableRecord();
-        pRecord->setName(_T("_tag"));
-
-        AcCmColor color;
-        color.setColorIndex(1);
-        pRecord->setColor(color);
-        pRecord->setIsOff(true);
-
-        // НЕКОНСТАНТНАЯ переменная для add()
-        AcDbObjectId layerId = AcDbObjectId::kNull;
-        pLayerTable->add(layerId, pRecord);
-        pRecord->close();
-    }
-
-    pLayerTable->close();
+    TrinityLayerManager::ensureTagLayer(db);
 }

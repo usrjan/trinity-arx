@@ -13,6 +13,10 @@ public:
     // Создать/получить слой материала
     static AcDbObjectId createOrGetLayer(AcDbDatabase* db, const std::string& materialCode);
 
+    // Общий хелпер: создать/получить слой по широкому имени с цветом/флагом off.
+    // Единственная реализация работы с LayerTable; используется всеми ensure*-функциями.
+    static AcDbObjectId createOrGetLayerByName(AcDbDatabase* db, const wchar_t* wName, int colorIndex, bool off = false);
+
     // Технические слои
     static void ensureTagLayer(AcDbDatabase* db);   // _tag
     static void ensureBoltLayer(AcDbDatabase* db);  // _bolt

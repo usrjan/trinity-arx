@@ -28,9 +28,10 @@ AcDb3dSolid* TrinityGeometryBuilder::buildBox(const TrinityNeuron& d) {
     solid->transformBy(mat);
 
     std::string layer = TrinityLayerManager::layerName(d.material);
-    wchar_t layerW[256];
-    MultiByteToWideChar(CP_UTF8, 0, layer.c_str(), -1, layerW, 256);
-    solid->setLayer(layerW);
+    // Фиксированный wchar_t[256] опасен: при переполнении MultiByteToWideChar
+    // не пишет ничего, и setLayer читает мусор со стека (Access Violation).
+    std::wstring layerW = utf8ToWide(layer);
+    if (!layerW.empty()) solid->setLayer(layerW.c_str());
 
     return solid;
 }
@@ -157,7 +158,7 @@ AcDb3dSolid* TrinityGeometryBuilder::buildRib(const TrinityNeuron& d) {
         return nullptr;
     }
     AcDbRegion* pRegion = AcDbRegion::cast((AcRxObject*)regions[0]);
-    if (pRegion == NULL) {
+    if (pRegion == nullptr) {
         acutPrintf(_T("\n[GeometryBuilder] region cast failed\n"));
         for (int i = 0; i < lines.length(); i++) delete (AcRxObject*)lines[i];
         for (int i = 0; i < regions.length(); i++) delete (AcRxObject*)regions[i];
@@ -207,7 +208,7 @@ AcDb3dSolid* TrinityGeometryBuilder::extrudeProfile(const AcGePoint3dArray& pts,
         return nullptr;
     }
     AcDbRegion* pRegion = AcDbRegion::cast((AcRxObject*)regions[0]);
-    if (pRegion == NULL) {
+    if (pRegion == nullptr) {
         for (int i = 0; i < lines.length(); i++) delete (AcRxObject*)lines[i];
         for (int i = 0; i < regions.length(); i++) delete (AcRxObject*)regions[i];
         delete pPoly;

@@ -4,97 +4,18 @@
 #include "TrinityGeometryBuilder.h"
 #include "TrinityLayerManager.h"
 #include "TrinityAttributeBuilder.h"
-#include <io.h>
+#include <cstring>   // strlen (парсинг holes)
+// Примечание: <io.h> уже включён через StdAfx.h — дубль убран.
 
 // ============================================================
-// ГЛАВНЫЙ РЕКУРСИВНЫЙ МЕТОД
+// ПРИМЕЧАНИЕ: вставка готового DWG проекта в текущий чертёж НЕ делается.
+// Метод ensureExists был удалён как мёртвый код, реализованная вместо
+// него insertProjectToTarget вызывала ошибку 320 (eWasOpenForWrite) при
+// работе с активным документом и была убрана по решению заказчика:
+// достаточно того, что процесс сборки создаёт файл проекта на диске.
+// Единственный потребитель attachXref — buildDwg (вставка детей как
+// XREF во ВРЕМЕННУЮ базу с последующим wblock).
 // ============================================================
-// Логика:
-//   1. Загружаем нейрон по коду
-//   2. Определяем подкаталог (details/assemblies/projects)
-//   3. Если файл есть — вставляем XREF и выходим
-//   4. Если файла нет:
-//      - для detail  → buildDetail
-//      - для assembly/construction/project → buildDwg
-//   5. Сохраняем DWG через saveDwg
-//   6. Вставляем XREF
-// ============================================================
-AcDbObjectId TrinityBuildEngine::ensureExists(const std::string& code,
-                                                const AcGePoint3d& position,
-                                                const TrinityRotationCompound& rotation,
-                                                AcDbDatabase* targetDb,
-                                                int depth) {
-    // Защита от бесконечной рекурсии
-    if (depth > 20) {
-        wchar_t* wCode = utf2uni(code.c_str());
-        acutPrintf(_T("\n[BuildEngine] MAX DEPTH reached for %s\n"), wCode);
-        free(wCode);
-        return AcDbObjectId::kNull;
-    }
-
-    // 1. Загружаем нейрон
-    TrinityNeuron* pNeuron = m_core.loadNeuronByCode(code);
-    if (!pNeuron) {
-        wchar_t* wCode = utf2uni(code.c_str());
-        acutPrintf(_T("\n[BuildEngine] Neuron not found: %s\n"), wCode);
-        free(wCode);
-        return AcDbObjectId::kNull;
-    }
-
-    TrinityNeuron neuron = *pNeuron;
-    delete pNeuron;
-
-    // 2. Определяем подкаталог
-    std::string subdir;
-    if (neuron.type == "detail") {
-        subdir = m_files.detailsDir();
-    } else if (neuron.type == "assembly" || neuron.type == "construction") {
-        subdir = m_files.assembliesDir();
-    } else {
-        subdir = m_files.projectsDir();
-    }
-
-    std::string filePath = m_files.getFilePath(neuron.code, subdir);
-
-    // 3. Если файл существует — вставляем XREF
-    if (m_files.fileExists(neuron.code, subdir)) {
-        wchar_t* wCode = utf2uni(neuron.code.c_str());
-        acutPrintf(_T("\n[BuildEngine] EXISTS: %s (depth=%d)\n"), wCode, depth);
-        free(wCode);
-
-        return m_files.attachXref(filePath, neuron.code, position, rotation, targetDb);
-    }
-
-    // 4. Файла нет — строим
-    wchar_t* wCode = utf2uni(neuron.code.c_str());
-    wchar_t* wType = utf2uni(neuron.type.c_str());
-    acutPrintf(_T("\n[BuildEngine] BUILDING: %s (type=%s, depth=%d)\n"),
-               wCode, wType, depth);
-    free(wCode);
-    free(wType);
-
-    AcDbDatabase* cleanDb = nullptr;
-
-    if (neuron.type == "detail") {
-        cleanDb = buildDetail(neuron);
-    } else {
-        cleanDb = buildDwg(neuron, depth);
-    }
-
-    if (!cleanDb) {
-        return AcDbObjectId::kNull;
-    }
-
-    // 5. Сохраняем
-    m_files.saveDwg(cleanDb, filePath);
-    delete cleanDb;
-
-    // Пауза для файловой системы
-    Sleep(200);
-
-    // 6. Вставляем XREF
-    return m_files.attachXref(filePath, neuron.code, position, rotation, targetDb);
-}
 
 // ============================================================
 // ПОСТРОЕНИЕ ДЕТАЛИ
@@ -127,9 +48,10 @@ AcDbDatabase* TrinityBuildEngine::buildDetail(const TrinityNeuron& detail) {
 
     // Назначаем слой
     std::string layer = TrinityLayerManager::layerName(detail.material);
-    wchar_t layerW[256];
-    MultiByteToWideChar(CP_UTF8, 0, layer.c_str(), -1, layerW, 256);
-    solid->setLayer(layerW);
+    // Фикс AV: точный размер вместо wchar_t[256] (при переполнении буфер
+    // оставался неинициализированным — setLayer читал мусор стека).
+    std::wstring layerW = utf8ToWide(layer);
+    if (!layerW.empty()) solid->setLayer(layerW.c_str());
 
     // Получаем Model Space
     AcDbBlockTable* pBt = nullptr;
@@ -195,34 +117,51 @@ AcDbDatabase* TrinityBuildEngine::buildDetail(const TrinityNeuron& detail) {
 
         std::vector<AcGePoint3d> holePositions;
 
-        // Парсим holes из JSON
+        // Парсим holes из JSON (ручной поиск подстрок — временное решение,
+        // см. рекомендацию по nlohmann/json). Обходим массив поэлементно:
+        // границы каждого объекта {"..."} находятся по '{' и '}'.
+        // Исправлены две ошибки прежней версии:
+        //   1) бесконечный цикл: при отсутствии "y" индекс сдвигался как
+        //      npos + 1 (переполнение size_t -> 0) и поиск начинался заново;
+        //   2) склейка значений между объектами ("y" искался по всему массиву,
+        //      мог взять координату из следующего элемента или дать мусорный
+        //      ноль вместо пропуска неполного элемента).
         size_t holesPos = detail.jsonData.find("\"holes\"");
         if (holesPos != std::string::npos) {
             size_t arrStart = detail.jsonData.find('[', holesPos);
-            size_t arrEnd = detail.jsonData.find(']', arrStart);
+            if (arrStart != std::string::npos) {
+                size_t arrEnd = detail.jsonData.find(']', arrStart);
+                if (arrEnd != std::string::npos && arrEnd > arrStart) {
+                    std::string holesStr = detail.jsonData.substr(arrStart, arrEnd - arrStart + 1);
 
-            if (arrStart != std::string::npos && arrEnd != std::string::npos) {
-                std::string holesStr = detail.jsonData.substr(arrStart, arrEnd - arrStart + 1);
+                    // Извлекает числовое значение по ключу внутри одного объекта;
+                    // false — ключа или ':' нет.
+                    auto findNumInObj = [](const std::string& obj, const char* key, double& out) -> bool {
+                        size_t k = obj.find(key);
+                        if (k == std::string::npos) return false;
+                        size_t colon = obj.find(':', k + strlen(key));
+                        if (colon == std::string::npos) return false;
+                        out = atof(obj.c_str() + colon + 1);
+                        return true;
+                    };
 
-                size_t objPos = 0;
-                while ((objPos = holesStr.find("\"x\"", objPos)) != std::string::npos) {
-                    double x = 0, y = 0;
+                    size_t objStart = 0;
+                    while ((objStart = holesStr.find('{', objStart)) != std::string::npos) {
+                        size_t objEnd = holesStr.find('}', objStart);
+                        if (objEnd == std::string::npos) break;          // обрывок JSON — стоп
 
-                    size_t xVal = holesStr.find(':', objPos);
-                    if (xVal != std::string::npos) {
-                        x = atof(holesStr.c_str() + xVal + 1);
-                    }
-
-                    size_t yPos = holesStr.find("\"y\"", objPos);
-                    if (yPos != std::string::npos) {
-                        size_t yVal = holesStr.find(':', yPos);
-                        if (yVal != std::string::npos) {
-                            y = atof(holesStr.c_str() + yVal + 1);
+                        std::string obj = holesStr.substr(objStart, objEnd - objStart + 1);
+                        double x = 0, y = 0;
+                        bool hasX = findNumInObj(obj, "\"x\"", x);
+                        bool hasY = findNumInObj(obj, "\"y\"", y);
+                        if (hasX && hasY) {
+                            holePositions.push_back(AcGePoint3d(x, y, 0));
+                        } else if (hasX || hasY) {
+                            acutPrintf(_T("\n[BuildEngine] holes: incomplete element skipped: %hs\n"), obj.c_str());
                         }
-                    }
 
-                    holePositions.push_back(AcGePoint3d(x, y, 0));
-                    objPos = yPos + 1;
+                        objStart = objEnd + 1;                           // строгий прогресс
+                    }
                 }
             }
         }
@@ -279,8 +218,19 @@ AcDbDatabase* TrinityBuildEngine::buildDetail(const TrinityNeuron& detail) {
     Acad::ErrorStatus es = tempDb->wblock(cleanDb, ids, AcGePoint3d::kOrigin);
     delete tempDb;
 
-    if (es != Acad::eOk || !cleanDb) {
-        delete cleanDb;
+    if (es != Acad::eOk) {
+        // При ошибке wblock не гарантирует корректного состояния выходного
+        // указателя: он может остаться nullptr, а может указывать на
+        // частично сконструированную базу. Удаление такого объекта приводит
+        // к двойному free() / Access Violation — просто обнуляем указатель
+        // и возвращаем ошибку. Если база всё же валидна (es == eOk, но
+        // cleanDb == nullptr — формально невозможно, но защищаемся), её
+        // тоже нельзя удалять вслепую.
+        acutPrintf(_T("\n[BuildEngine] wblock failed: %d\n"), (int)es);
+        cleanDb = nullptr;
+        return nullptr;
+    }
+    if (!cleanDb) {
         return nullptr;
     }
 
@@ -329,14 +279,14 @@ AcDbDatabase* TrinityBuildEngine::buildDetail(const TrinityNeuron& detail) {
         return nullptr;
     }
 
-    wchar_t matLayerW[256];
-    MultiByteToWideChar(CP_UTF8, 0, layer.c_str(), -1, matLayerW, 256);
+    std::wstring matLayerW = utf8ToWide(layer);  // фикс AV: точный размер
 
     for (pIter->start(); !pIter->done(); pIter->step()) {
         AcDbEntity* pEnt = nullptr;
         if (pIter->getEntity(pEnt, AcDb::kForWrite) == Acad::eOk && pEnt) {
             if (pEnt->isKindOf(AcDb3dSolid::desc())) {
-                pEnt->setLayer(matLayerW);        // солид → материал
+                if (!matLayerW.empty())
+                    pEnt->setLayer(matLayerW.c_str());  // солид → материал
             } else if (pEnt->isKindOf(AcDbCircle::desc())) {
                 pEnt->setLayer(_T("_bolt"));       // кружочек → _bolt
             } else {
@@ -352,7 +302,9 @@ AcDbDatabase* TrinityBuildEngine::buildDetail(const TrinityNeuron& detail) {
     // Финальный отчёт
     /*
     wchar_t* wCode = utf2uni(detail.code.c_str());
-    acutPrintf(_T("\n[BuildEngine] Detail built: %s\n"), wCode);
+    // Фикс: %s для wchar_t* — неопределённое поведение (ANSI-printf читает
+    // wide-строку как char*, печатает мусор/краш). Только %ls.
+    acutPrintf(_T("\n[BuildEngine] Detail built: %ls\n"), wCode);
     free(wCode);
     */
 
@@ -384,7 +336,8 @@ AcDbDatabase* TrinityBuildEngine::buildDwg(const TrinityNeuron& neuron, int dept
 
     /*
     wchar_t* wCode = utf2uni(neuron.code.c_str());
-    acutPrintf(_T("\n[BuildEngine] Building %s: %d children (depth=%d)\n"),
+    // Фикс: wchar_t* аргумент требует %ls, а не %s
+    acutPrintf(_T("\n[BuildEngine] Building %ls: %d children (depth=%d)\n"),
         wCode, static_cast<int>(children.size()), depth);
     free(wCode);
     */
@@ -394,7 +347,8 @@ AcDbDatabase* TrinityBuildEngine::buildDwg(const TrinityNeuron& neuron, int dept
 
         /*
         wchar_t* wChild = utf2uni(syn.childCode.c_str());
-        acutPrintf(_T("\n[BuildEngine] Child: %s (depth=%d)\n"), wChild, depth);
+        // Фикс: wchar_t* аргумент требует %ls, а не %s
+        acutPrintf(_T("\n[BuildEngine] Child: %ls (depth=%d)\n"), wChild, depth);
         free(wChild);
         */
 
@@ -434,8 +388,14 @@ AcDbDatabase* TrinityBuildEngine::buildDwg(const TrinityNeuron& neuron, int dept
     Acad::ErrorStatus es = tempDb->wblock(cleanDb, ids, AcGePoint3d::kOrigin);
     delete tempDb;
 
-    if (es != Acad::eOk || !cleanDb) {
-        delete cleanDb;
+    if (es != Acad::eOk) {
+        // Не удаляем cleanDb вслепую: при ошибке wblock выходной указатель
+        // может быть в неопределённом состоянии (частично сконструированная
+        // база) — delete приведёт к двойному free() / Access Violation.
+        acutPrintf(_T("\n[BuildEngine] buildDwg wblock failed: %d\n"), (int)es);
+        return nullptr;
+    }
+    if (!cleanDb) {
         return nullptr;
     }
 
@@ -452,7 +412,7 @@ std::string TrinityBuildEngine::ensureFileExists(const std::string& code, int de
     // Защита от бесконечной рекурсии
     if (depth > 20) {
         wchar_t* wCode = utf2uni(code.c_str());
-        acutPrintf(_T("\n[BuildEngine] MAX DEPTH for %s\n"), wCode);
+        acutPrintf(_T("\n[BuildEngine] MAX DEPTH for %ls\n"), wCode);
         free(wCode);
         return "";
     }
@@ -464,16 +424,8 @@ std::string TrinityBuildEngine::ensureFileExists(const std::string& code, int de
     TrinityNeuron neuron = *pNeuron;
     delete pNeuron;
 
-    // Определяем подкаталог
-    std::string subdir;
-    if (neuron.type == "detail") {
-        subdir = m_files.detailsDir();
-    } else if (neuron.type == "assembly" || neuron.type == "construction") {
-        subdir = m_files.assembliesDir();
-    } else {
-        subdir = m_files.projectsDir();
-    }
-
+    // Подкаталог и путь — через единый хелпер FileManager
+    std::string subdir = m_files.subdirForType(neuron.type);
     std::string filePath = m_files.getFilePath(neuron.code, subdir);
 
     // Если файл уже есть — возвращаем путь
@@ -490,7 +442,8 @@ std::string TrinityBuildEngine::ensureFileExists(const std::string& code, int de
 
     if (!db) return "";
 
-    // Сохраняем
+    // Сохраняем (промежуточные папки создаются рекурсивно, путь — Unicode-безопасно)
+    ensureDirectoryForFile(filePath);
     m_files.saveDwg(db, filePath);
     delete db;
     Sleep(200);
@@ -501,7 +454,13 @@ std::string TrinityBuildEngine::ensureFileExists(const std::string& code, int de
 // ============================================================
 // ОБРАБОТКА ВСЕХ PENDING-ПРОЕКТОВ
 // ============================================================
-int TrinityBuildEngine::processAllProjects(AcDbDatabase* targetDb) {
+// Результат работы — файлы DWG на диске (проекты, конструкции, детали).
+// Вставка проекта в текущий чертёж сознательно НЕ выполняется: пользователю
+// достаточно созданного файла проекта (см. примечание в начале файла).
+// Параметр targetDb сохранён в сигнатуре для совместимости с вызывающим
+// кодом (trinityProcess), но внутри не используется.
+// ============================================================
+int TrinityBuildEngine::processAllProjects(AcDbDatabase* /*targetDb*/) {
     auto projects = m_core.loadPendingProjects();
     if (projects.empty()) return 0;
 
@@ -516,11 +475,11 @@ int TrinityBuildEngine::processAllProjects(AcDbDatabase* targetDb) {
         deleteProjectFiles(proj.code);
 
         // Создаём файл проекта (рекурсивно)
-        std::string actualPath = ensureFileExists(proj.code, 0);
+        std::string projectFilePath = ensureFileExists(proj.code, 0);
 
-        if (actualPath.empty()) {
+        if (projectFilePath.empty()) {
             wchar_t* wCode = utf2uni(proj.code.c_str());
-            acutPrintf(_T("\n[BuildEngine] Failed to create project: %s\n"), wCode);
+            acutPrintf(_T("\n[BuildEngine] Failed to create project: %ls\n"), wCode);
             free(wCode);
             continue;
         }
@@ -529,7 +488,7 @@ int TrinityBuildEngine::processAllProjects(AcDbDatabase* targetDb) {
         m_core.markNeuronDone(proj.id);
 
         wchar_t* wCode = utf2uni(proj.code.c_str());
-        acutPrintf(_T("\n[BuildEngine] Project done: %s\n"), wCode);
+        acutPrintf(_T("\n[BuildEngine] Project done: %ls\n"), wCode);
         free(wCode);
     }
 
@@ -547,26 +506,19 @@ void TrinityBuildEngine::deleteProjectFiles(const std::string& code) {
     TrinityNeuron neuron = *pNeuron;
     delete pNeuron;
 
-    // Определяем подкаталог и путь к файлу
-    std::string subdir;
-    if (neuron.type == "detail") {
-        subdir = m_files.detailsDir();
-    } else if (neuron.type == "assembly" || neuron.type == "construction") {
-        subdir = m_files.assembliesDir();
-    } else {
-        subdir = m_files.projectsDir();
-    }
-
+    // Подкаталог и путь к файлу — через единый хелпер FileManager
+    std::string subdir = m_files.subdirForType(neuron.type);
     std::string filePath = m_files.getFilePath(neuron.code, subdir);
 
     // Удаляем файл, если он существует
     if (m_files.fileExists(neuron.code, subdir)) {
-        wchar_t pathW[512];
-        MultiByteToWideChar(CP_UTF8, 0, filePath.c_str(), -1, pathW, 512);
-        _wunlink(pathW);
+        // Фикс AV: точный размер вместо wchar_t[512] — при переполнении
+        // буфер оставался неинициализированным и _wunlink читал мусор.
+        std::wstring pathW = utf8ToWide(filePath);
+        if (!pathW.empty()) _wunlink(pathW.c_str());
         
         wchar_t* wCode = utf2uni(neuron.code.c_str());
-        acutPrintf(_T("\n[BuildEngine] Deleted file: %s.dwg\n"), wCode);
+        acutPrintf(_T("\n[BuildEngine] Deleted file: %ls.dwg\n"), wCode);
         free(wCode);
     }
 

@@ -65,6 +65,13 @@ class TrinityCore {
     MYSQL* m_mysql = nullptr;
     bool m_connected = false;
 
+    // Сохранённые параметры подключения — нужны для автоматического
+    // переподключения (ensureConnected) после обрыва соединения сервером.
+    std::string m_host, m_user, m_pass, m_db;
+
+    // Полное закрытие старого хэндла перед новым mysql_init
+    void closeHandle();
+
 public:
     TrinityCore() = default;
     ~TrinityCore();
@@ -73,6 +80,19 @@ public:
     void disconnect();
     bool isConnected() const { return m_connected; }
     MYSQL* handle() { return m_mysql; }
+
+    // Проверка живости соединения через mysql_ping(). При обрыве
+    // (ошибки 2006/2013 и др.) автоматически переподключается с
+    // сохранёнными параметрами. Возвращает true, если соединение живо.
+    // Вызывается в начале каждой публичной операции с БД.
+    bool ensureConnected();
+
+private:
+    // Логирование ошибки последнего неудачного mysql_query в консоль AutoCAD.
+    // При фатальных кодах обрыва помечает соединение мёртвым для реконнекта.
+    void logQueryError(const char* context, const std::string& query);
+
+public:
 
     // Нейроны
     TrinityNeuron* loadNeuronByCode(const std::string& code);
