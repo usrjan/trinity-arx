@@ -32,6 +32,10 @@
 #include <dbsymtb.h>
 #include <dbgroup.h>
 #include <dbapserv.h>
+// Утилиты над symbol tables: eraseAcDbSymbolRecord() и др.
+// (используется в TrinityFileManager::insertXref для безопасного
+//  удаления устаревших XREF-записей без ручного upgradeOpen())
+#include <acdbSymutil.h>
 
 // ============================================
 // AutoCAD — 3D
