@@ -41,6 +41,7 @@ CREATE TABLE IF NOT EXISTS `text` (
 -- роуты, настройки, секции — любые сущности системы.
 -- 
 -- ВИРТУАЛЬНЫЕ СТОЛБЦЫ (вычисляются из JSON в data):
+--   code       — бизнес-код детали/конструкции/проекта (D.S.0.425.850.10, PROJ-TEST-001)
 --   slug       — текстовый идентификатор (опциональный)
 --   route      — URL-путь для страниц и пунктов меню
 --   login      — логин пользователя
@@ -48,6 +49,16 @@ CREATE TABLE IF NOT EXISTS `text` (
 --   sort       — порядок сортировки (по умолчанию 999999)
 --   is_deleted — 1 если в data есть deleted_at
 --   hash       — SHA2-хеш для быстрого сравнения нейронов
+--
+-- ПОЧЕМУ ВИРТУАЛЬНЫЙ СТОЛБЕЦ, А НЕ JSON-ВЫРАЖЕНИЕ В WHERE:
+--   Запрос вида "WHERE JSON_UNQUOTE(JSON_EXTRACT(data,'$.code')) = '...'"
+--   не может использовать никакой индекс: MySQL обязан вычислить функцию
+--   над JSON для КАЖДОЙ строки таблицы, то есть выполняет полный скан (O(N)).
+--   Плагин вызывает такой запрос рекурсивно на каждый узел графа сборки
+--   (TrinityCore::loadNeuronByCode), поэтому без индекса время сборки
+--   растёт линейно от размера базы и умножается на число узлов.
+--   Генерируемый (virtual) столбец + индекс по нему превращают поиск в
+--   единственный B-tree lookup (O(log N)) — см. idx_code ниже.
 -- ============================================
 CREATE TABLE IF NOT EXISTS `neuron` (
     `id` INT UNSIGNED NOT NULL AUTO_INCREMENT,
@@ -59,6 +70,27 @@ CREATE TABLE IF NOT EXISTS `neuron` (
     `date` DATETIME NULL,                  -- дата создания/изменения
     
     -- Виртуальные столбцы
+
+    -- code: бизнес-код сущности (деталь 'D.S.0.425.850.10', конструкция
+    -- 'C.S.0.3.425.850', проект 'PROJ-TEST-001'). Используется плагином
+    -- TrinityBuildEngine как ЕДИНСТВЕННЫЙ ключ для поиска нейрона по коду,
+    -- поэтому вынесен в генерируемый столбец и покрыт индексом idx_code.
+    --
+    -- VIRTUAL (а не STORED), потому что:
+    --   1) JSON_UNQUOTE(JSON_EXTRACT(...)) — детерминированное выражение от
+    --      columns таблицы, ограничения на VIRTUAL-столбцы не нарушаются;
+    --   2) VIRTUAL не дублирует данные в строке (экономия места и faster INSERT);
+    --   3) вторичный индекс над VIRTUAL-столбцом хранит значение внутри себя,
+    --      т.е. фактически materializуется в индексе — поиск идёт по B-tree;
+    --   4) изменение expression не требует перестройки данных таблицы (ALTER ...
+    --      INPLACE), в отличие от STORED.
+    --
+    -- NULL когда у нейрона нет $.code (деревья, тексты, конфиги) — именно
+    -- поэтому ниже UNIQUE KEY, а не PRIMARY KEY: в MySQL UNIQUE допускает
+    -- любое количество NULL-значений, так что «бескодовые» нейроны не конфликтуют,
+    -- а дубликаты реальных кодов отлавливаются на уровне БД.
+    `code` VARCHAR(64) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin
+        GENERATED ALWAYS AS (JSON_UNQUOTE(JSON_EXTRACT(`data`, '$.code'))) VIRTUAL,
     `slug` VARCHAR(255) GENERATED ALWAYS AS (JSON_UNQUOTE(JSON_EXTRACT(`data`, '$.slug'))) STORED,
     `route` VARCHAR(1024) GENERATED ALWAYS AS (JSON_UNQUOTE(JSON_EXTRACT(`data`, '$.route'))) STORED,
     `login` VARCHAR(255) GENERATED ALWAYS AS (JSON_UNQUOTE(JSON_EXTRACT(`data`, '$.login'))) STORED,
@@ -90,6 +122,20 @@ CREATE TABLE IF NOT EXISTS `neuron` (
     `event_is_active` TINYINT(1) GENERATED ALWAYS AS (COALESCE(JSON_EXTRACT(`data`, '$.is_active'), 1)) STORED,
     
     PRIMARY KEY (`id`),
+    -- === ИНДЕКС ПО БИЗНЕС-КОДУ (главная «горячая» точка плагина) ===
+    -- Покрывает виртуальный столбец `code`. Именно его использует оптимизатор
+    -- для запросов TrinityCore::loadNeuronByCode()/loadChildren() вида
+    --   WHERE JSON_UNQUOTE(JSON_EXTRACT(data,'$.code')) = '...'
+    -- MySQL 5.7+/8.x распознаёт expression, полностью совпадающий с определением
+    -- генерируемого столбца, и подставляет в план столбец с индексом
+    -- (ref access вместо full scan). Требует точного совпадения выражения
+    -- в WHERE — не переписывайте его на ->>, JSON_VALUE или UPPER() без
+    -- пересмотра индекса.
+    -- UNIQUE: код детали/конструкции/проекта обязан быть уникален; дубликат
+    -- дал бы неоднозначный выбор нейрона при сборке. NULL (нейроны без code)
+    -- в уникальном индексе не ограничиваются.
+    UNIQUE KEY `idx_code` (`code`),
+
     -- Базовые индексы
     INDEX `idx_pid` (`pid`),
     INDEX `idx_type` (`type`),
@@ -177,6 +223,78 @@ CREATE TABLE IF NOT EXISTS `synapse` (
     INDEX `idx_hash` (`hash`(64)),
     INDEX `idx_created_at` (`created_at`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- ============================================
+-- 2b. МИГРАЦИЯ СУЩЕСТВУЮЩИХ БАЗ: ДОБАВИТЬ code + idx_code
+-- ============================================
+-- Дамп выше содержит `code` только для «чистой» установки. Если база уже
+-- создана более ранней версией database.sql (без виртуального столбца),
+-- CREATE TABLE IF NOT EXISTS ничего не сделает и loadNeuronByCode()
+-- продолжит сканировать таблицу целиком. Выполните этот блок один раз —
+-- он идемпотентен благодаря проверке information_schema.
+--
+-- ОЖИДАЕМЫЕ ПОБОЧНЫЕ ЭФФЕКТЫ (важно прочитать перед запуском на проде):
+--   * ALTER ... ADD COLUMN (VIRTUAL) + ADD UNIQUE INDEX выполняется INPLACE,
+--     но вторичный индекс строится с блокировкой записи (SHARE) — на большой
+--     таблице это пауза для INSERT/UPDATE. Делайте в технологическое окно.
+--   * Если в базе УЖЕ есть нейроны-дубликаты по $.code (например, случайно
+--     созданные копии детали), ADD UNIQUE KEY завершится ошибкой
+--     ER_DUP_ENTRY (1062). Сначала найдите дубликаты запросом ниже и
+--     пометьте лишние deleted_at (тогда is_deleted=1, а сам код при этом
+--     останется в индексе — удалённые нейроны тоже должны иметь уникальный
+--     код, иначе поиск вернёт «мёртвую» запись вместо живой):
+--
+--       SELECT code, COUNT(*) c, GROUP_CONCAT(id) ids
+--       FROM neuron
+--       WHERE JSON_UNQUOTE(JSON_EXTRACT(data, '$.code')) IS NOT NULL
+--         AND JSON_UNQUOTE(JSON_EXTRACT(data, '$.code')) <> 'null'
+--       GROUP BY code HAVING c > 1;
+--
+--     Вариант «разрулить» дубликат без удаления: переименуйте код лишней
+--     записи, например
+--       UPDATE neuron SET data = JSON_SET(data, '$.code', CONCAT(code, '#dup'))
+--       WHERE id = <лишний_id>;
+-- ============================================
+SET @trinity_has_code_col := (
+    SELECT COUNT(*)
+    FROM information_schema.COLUMNS
+    WHERE TABLE_SCHEMA = DATABASE()
+      AND TABLE_NAME   = 'neuron'
+      AND COLUMN_NAME  = 'code'
+);
+-- Если столбца нет — добавляем его и индекс одним ALTER (одна перестройка
+-- метаданных вместо двух). MySQL не умеет "ADD COLUMN IF NOT EXISTS",
+-- поэтому используем подготовленный запрос по результату проверки.
+SET @trinity_sql := IF(@trinity_has_code_col = 0,
+    'ALTER TABLE `neuron`
+        ADD COLUMN `code` VARCHAR(64) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin
+            GENERATED ALWAYS AS (JSON_UNQUOTE(JSON_EXTRACT(`data`, ''$.code''))) VIRTUAL,
+        ADD UNIQUE KEY `idx_code` (`code`)',
+    'SELECT ''neuron.code already exists - migration skipped'' AS info');
+PREPARE trinity_stmt FROM @trinity_sql;
+EXECUTE trinity_stmt;
+DEALLOCATE PREPARE trinity_stmt;
+
+-- Отдельная проверка для случая, когда столбец уже был, но индекса нет
+-- (например, добавлен вручную без UNIQUE). Аналогично идемпотентно.
+SET @trinity_has_code_idx := (
+    SELECT COUNT(*)
+    FROM information_schema.STATISTICS
+    WHERE TABLE_SCHEMA = DATABASE()
+      AND TABLE_NAME   = 'neuron'
+      AND INDEX_NAME   = 'idx_code'
+);
+SET @trinity_sql := IF(@trinity_has_code_idx = 0,
+    'ALTER TABLE `neuron` ADD UNIQUE KEY `idx_code` (`code`)',
+    'SELECT ''neuron.idx_code already exists - migration skipped'' AS info');
+PREPARE trinity_stmt FROM @trinity_sql;
+EXECUTE trinity_stmt;
+DEALLOCATE PREPARE trinity_stmt;
+
+-- Быстрая самопроверка после миграции: план должен показывать type=ref,
+-- key=idx_code, rows=1 (а не type=ALL / rows=<весь размер таблицы>).
+--   EXPLAIN SELECT id FROM neuron
+--   WHERE JSON_UNQUOTE(JSON_EXTRACT(data, '$.code')) = 'D.S.0.425.425.10';
 
 -- ============================================
 -- 4. ТЕКСТЫ
@@ -538,15 +656,15 @@ SET @panel_425_425_id = LAST_INSERT_ID();
 -- Щит
 INSERT INTO synapse (parent, child, data) 
 SELECT @panel_425_425_id, id, JSON_OBJECT('pos', JSON_ARRAY(0, 0, 0), 'rot', JSON_ARRAY(0, 0, 0, 0))
-FROM neuron WHERE JSON_UNQUOTE(JSON_EXTRACT(data, '$.code')) = 'D.S.0.425.425.10';
+FROM neuron WHERE code = 'D.S.0.425.425.10';
 
 -- Планки
 INSERT INTO synapse (parent, child, data) 
 SELECT @panel_425_425_id, id, JSON_OBJECT('pos', JSON_ARRAY(0, 12, 10), 'rot', JSON_ARRAY(0, 0, 0, 0))
-FROM neuron WHERE JSON_UNQUOTE(JSON_EXTRACT(data, '$.code')) = 'D.S.3.425.125.10';
+FROM neuron WHERE code = 'D.S.3.425.125.10';
 INSERT INTO synapse (parent, child, data) 
 SELECT @panel_425_425_id, id, JSON_OBJECT('pos', JSON_ARRAY(0, 288, 10), 'rot', JSON_ARRAY(0, 0, 0, 0))
-FROM neuron WHERE JSON_UNQUOTE(JSON_EXTRACT(data, '$.code')) = 'D.S.3.425.125.10';
+FROM neuron WHERE code = 'D.S.3.425.125.10';
 
 -- ============================================
 -- КОНСТРУКЦИЯ: Щит 425×850 + 4 планки
@@ -558,21 +676,21 @@ SET @panel_425_850_id = LAST_INSERT_ID();
 -- Щит
 INSERT INTO synapse (parent, child, data) 
 SELECT @panel_425_850_id, id, JSON_OBJECT('pos', JSON_ARRAY(0, 0, 0), 'rot', JSON_ARRAY(0, 0, 0, 0))
-FROM neuron WHERE JSON_UNQUOTE(JSON_EXTRACT(data, '$.code')) = 'D.S.0.425.850.10';
+FROM neuron WHERE code = 'D.S.0.425.850.10';
 
 -- Планки
 INSERT INTO synapse (parent, child, data) 
 SELECT @panel_425_850_id, id, JSON_OBJECT('pos', JSON_ARRAY(0, 12, 10), 'rot', JSON_ARRAY(0, 0, 0, 0))
-FROM neuron WHERE JSON_UNQUOTE(JSON_EXTRACT(data, '$.code')) = 'D.S.3.425.125.10';
+FROM neuron WHERE code = 'D.S.3.425.125.10';
 INSERT INTO synapse (parent, child, data) 
 SELECT @panel_425_850_id, id, JSON_OBJECT('pos', JSON_ARRAY(0, 288, 10), 'rot', JSON_ARRAY(0, 0, 0, 0))
-FROM neuron WHERE JSON_UNQUOTE(JSON_EXTRACT(data, '$.code')) = 'D.S.3.425.125.10';
+FROM neuron WHERE code = 'D.S.3.425.125.10';
 INSERT INTO synapse (parent, child, data) 
 SELECT @panel_425_850_id, id, JSON_OBJECT('pos', JSON_ARRAY(0, 437, 10), 'rot', JSON_ARRAY(0, 0, 0, 0))
-FROM neuron WHERE JSON_UNQUOTE(JSON_EXTRACT(data, '$.code')) = 'D.S.3.425.125.10';
+FROM neuron WHERE code = 'D.S.3.425.125.10';
 INSERT INTO synapse (parent, child, data) 
 SELECT @panel_425_850_id, id, JSON_OBJECT('pos', JSON_ARRAY(0, 713, 10), 'rot', JSON_ARRAY(0, 0, 0, 0))
-FROM neuron WHERE JSON_UNQUOTE(JSON_EXTRACT(data, '$.code')) = 'D.S.3.425.125.10';
+FROM neuron WHERE code = 'D.S.3.425.125.10';
 
 -- ============================================
 -- КОНСТРУКЦИЯ: Щит 850x425 + 2 планки
@@ -584,15 +702,15 @@ SET @panel_850_425_id = LAST_INSERT_ID();
 -- Щит
 INSERT INTO synapse (parent, child, data) 
 SELECT @panel_850_425_id, id, JSON_OBJECT('pos', JSON_ARRAY(850, 0, 0), 'rot', JSON_ARRAY(0, 0, 1, 90))
-FROM neuron WHERE JSON_UNQUOTE(JSON_EXTRACT(data, '$.code')) = 'D.S.0.425.850.10';
+FROM neuron WHERE code = 'D.S.0.425.850.10';
 
 -- Планки
 INSERT INTO synapse (parent, child, data) 
 SELECT @panel_850_425_id, id, JSON_OBJECT('pos', JSON_ARRAY(0, 12, 10), 'rot', JSON_ARRAY(0, 0, 0, 0))
-FROM neuron WHERE JSON_UNQUOTE(JSON_EXTRACT(data, '$.code')) = 'D.S.3.850.125.10';
+FROM neuron WHERE code = 'D.S.3.850.125.10';
 INSERT INTO synapse (parent, child, data) 
 SELECT @panel_850_425_id, id, JSON_OBJECT('pos', JSON_ARRAY(0, 288, 10), 'rot', JSON_ARRAY(0, 0, 0, 0))
-FROM neuron WHERE JSON_UNQUOTE(JSON_EXTRACT(data, '$.code')) = 'D.S.3.850.125.10';
+FROM neuron WHERE code = 'D.S.3.850.125.10';
 
 -- ============================================
 -- КОНСТРУКЦИЯ: Щит 850×850 + 4 планки
@@ -604,21 +722,21 @@ SET @panel_850_850_id = LAST_INSERT_ID();
 -- Щит 850×850
 INSERT INTO synapse (parent, child, data) 
 SELECT @panel_850_850_id, id, JSON_OBJECT('pos', JSON_ARRAY(0, 0, 0), 'rot', JSON_ARRAY(0, 0, 0, 0))
-FROM neuron WHERE JSON_UNQUOTE(JSON_EXTRACT(data, '$.code')) = 'D.S.0.850.850.10';
+FROM neuron WHERE code = 'D.S.0.850.850.10';
 
 -- Планки 850×125 (4 штуки, шаг как у 425×850)
 INSERT INTO synapse (parent, child, data) 
 SELECT @panel_850_850_id, id, JSON_OBJECT('pos', JSON_ARRAY(0, 12, 10), 'rot', JSON_ARRAY(0, 0, 0, 0))
-FROM neuron WHERE JSON_UNQUOTE(JSON_EXTRACT(data, '$.code')) = 'D.S.3.850.125.10';
+FROM neuron WHERE code = 'D.S.3.850.125.10';
 INSERT INTO synapse (parent, child, data) 
 SELECT @panel_850_850_id, id, JSON_OBJECT('pos', JSON_ARRAY(0, 288, 10), 'rot', JSON_ARRAY(0, 0, 0, 0))
-FROM neuron WHERE JSON_UNQUOTE(JSON_EXTRACT(data, '$.code')) = 'D.S.3.850.125.10';
+FROM neuron WHERE code = 'D.S.3.850.125.10';
 INSERT INTO synapse (parent, child, data) 
 SELECT @panel_850_850_id, id, JSON_OBJECT('pos', JSON_ARRAY(0, 437, 10), 'rot', JSON_ARRAY(0, 0, 0, 0))
-FROM neuron WHERE JSON_UNQUOTE(JSON_EXTRACT(data, '$.code')) = 'D.S.3.850.125.10';
+FROM neuron WHERE code = 'D.S.3.850.125.10';
 INSERT INTO synapse (parent, child, data) 
 SELECT @panel_850_850_id, id, JSON_OBJECT('pos', JSON_ARRAY(0, 713, 10), 'rot', JSON_ARRAY(0, 0, 0, 0))
-FROM neuron WHERE JSON_UNQUOTE(JSON_EXTRACT(data, '$.code')) = 'D.S.3.850.125.10';
+FROM neuron WHERE code = 'D.S.3.850.125.10';
 
 -- ============================================
 -- ОБЪЁМНАЯ КОНСТРУКЦИЯ: БАЛКА + ЩИТЫ (compound rotation)
@@ -633,9 +751,9 @@ INSERT INTO neuron (pid, type, data) VALUES (
 );
 SET @assy_425_id = LAST_INSERT_ID();
 
-SET @sw_425 = (SELECT MIN(id) FROM neuron WHERE JSON_UNQUOTE(JSON_EXTRACT(data, '$.code')) = 'D.S.2.425.425.10');
-SET @sw_850 = (SELECT MIN(id) FROM neuron WHERE JSON_UNQUOTE(JSON_EXTRACT(data, '$.code')) = 'D.S.2.425.850.10');
-SET @panel_425_850 = (SELECT MIN(id) FROM neuron WHERE JSON_UNQUOTE(JSON_EXTRACT(data, '$.code')) = 'C.S.0.3.425.850');
+SET @sw_425 = (SELECT MIN(id) FROM neuron WHERE code = 'D.S.2.425.425.10');
+SET @sw_850 = (SELECT MIN(id) FROM neuron WHERE code = 'D.S.2.425.850.10');
+SET @panel_425_850 = (SELECT MIN(id) FROM neuron WHERE code = 'C.S.0.3.425.850');
 
 -- Боковые стенки (двойной поворот: Y 90° + Z 90°)
 INSERT INTO synapse (parent, child, data) VALUES
@@ -672,9 +790,9 @@ INSERT INTO neuron (pid, type, data) VALUES (
 );
 SET @assy_850_id = LAST_INSERT_ID();
 
-SET @sw_425 = (SELECT MIN(id) FROM neuron WHERE JSON_UNQUOTE(JSON_EXTRACT(data, '$.code')) = 'D.S.2.425.425.10');
-SET @sw_850 = (SELECT MIN(id) FROM neuron WHERE JSON_UNQUOTE(JSON_EXTRACT(data, '$.code')) = 'D.S.2.425.850.10');
-SET @panel_850_850 = (SELECT MIN(id) FROM neuron WHERE JSON_UNQUOTE(JSON_EXTRACT(data, '$.code')) = 'C.S.0.3.850.850');
+SET @sw_425 = (SELECT MIN(id) FROM neuron WHERE code = 'D.S.2.425.425.10');
+SET @sw_850 = (SELECT MIN(id) FROM neuron WHERE code = 'D.S.2.425.850.10');
+SET @panel_850_850 = (SELECT MIN(id) FROM neuron WHERE code = 'C.S.0.3.850.850');
 
 -- Боковые стенки (двойной поворот: Y 90° + Z 90°)
 INSERT INTO synapse (parent, child, data) VALUES
@@ -710,11 +828,11 @@ INSERT INTO neuron (pid, type, data) VALUES (
 );
 SET @door_850_id = LAST_INSERT_ID();
 
-SET @sw_425 = (SELECT MIN(id) FROM neuron WHERE JSON_UNQUOTE(JSON_EXTRACT(data, '$.code')) = 'D.S.2.425.425.10');
-SET @sw_850 = (SELECT MIN(id) FROM neuron WHERE JSON_UNQUOTE(JSON_EXTRACT(data, '$.code')) = 'D.S.2.425.850.10');
-SET @sw_850_t1 = (SELECT MIN(id) FROM neuron WHERE JSON_UNQUOTE(JSON_EXTRACT(data, '$.code')) = 'D.S.2.425.850.10.T1');
+SET @sw_425 = (SELECT MIN(id) FROM neuron WHERE code = 'D.S.2.425.425.10');
+SET @sw_850 = (SELECT MIN(id) FROM neuron WHERE code = 'D.S.2.425.850.10');
+SET @sw_850_t1 = (SELECT MIN(id) FROM neuron WHERE code = 'D.S.2.425.850.10.T1');
 
-SET @panel_850_425 = (SELECT MIN(id) FROM neuron WHERE JSON_UNQUOTE(JSON_EXTRACT(data, '$.code')) = 'C.S.0.3.850.425');
+SET @panel_850_425 = (SELECT MIN(id) FROM neuron WHERE code = 'C.S.0.3.850.425');
 
 -- Боковые стенки (двойной поворот: Y 90° + Z 90°)
 INSERT INTO synapse (parent, child, data) VALUES

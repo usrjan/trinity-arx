@@ -67,11 +67,66 @@ bool TrinityCore::connect(const char* host, const char* user,
     mysql_set_character_set(m_mysql, "utf8mb4");
     mysql_query(m_mysql, "SET NAMES utf8mb4");
     m_connected = true;
+
+    // Диагностика схемы: без уникального индекса neuron.idx_code поиск по
+    // коду (loadNeuronByCode) работает полным сканом таблицы. Проверяем это
+    // один раз за подключение и предупреждаем оператора в консоли AutoCAD.
+    verifyCodeIndex();
     return true;
 }
 
 void TrinityCore::disconnect() {
     closeHandle();
+}
+
+// ============================================
+// ДИАГНОСТИКА: НАЛИЧИЕ ИНДЕКСА neuron.idx_code
+// ============================================
+// Сборка проекта рекурсивно вызывает loadNeuronByCode() для каждого узла
+// графа. Без виртуального столбца neuron.code и уникального индекса idx_code
+// (см. database.sql, раздел 2b) такой запрос выполняется полным сканом
+// таблицы, и время сборки растёт линейно с размером базы. Если плагин
+// подключился к базе, созданной старой версией дампа, деградация была бы
+// совершенно незаметна — поэтому проверяем метаданные один раз за сеанс
+// и явно предупреждаем в консоли AutoCAD, как запустить миграцию.
+//
+// Стоимость проверки: один лёгкий SELECT по information_schema сразу после
+// mysql_real_connect(), т.е. не чаще одного раза на переподключение.
+// Результат НЕ кэшируется между реконнектами специально: миграцию могут
+// выполнить, пока AutoCAD открыт, и при следующем обрыве связи предупреждение
+// должно исчезнуть само.
+void TrinityCore::verifyCodeIndex() {
+    if (!m_mysql) return;
+
+    const char* query =
+        "SELECT COUNT(*) FROM information_schema.STATISTICS "
+        "WHERE TABLE_SCHEMA = DATABASE() "
+        "  AND TABLE_NAME = 'neuron' "
+        "  AND INDEX_NAME = 'idx_code'";
+
+    if (mysql_query(m_mysql, query) != 0) {
+        // Нет прав на information_schema или сбой соединения — не считаем
+        // это фатальным: основная работа продолжится, просто без диагностики.
+        acutPrintf(_T("\n[TrinityCore] WARNING: cannot verify neuron.idx_code (%u): %hs\n"),
+                   mysql_errno(m_mysql), mysql_error(m_mysql));
+        return;
+    }
+
+    MYSQL_RES* result = mysql_store_result(m_mysql);
+    if (!result) return;
+
+    bool hasIndex = false;
+    MYSQL_ROW row = mysql_fetch_row(result);
+    if (row && row[0]) hasIndex = (atoi(row[0]) > 0);
+    mysql_free_result(result);
+
+    if (!hasIndex) {
+        acutPrintf(_T("\n[TrinityCore] WARNING: index neuron.idx_code is MISSING.\n"));
+        acutPrintf(_T("[TrinityCore]   Searches by code do a FULL TABLE SCAN -> slow builds.\n"));
+        acutPrintf(_T("[TrinityCore]   Run the migration block \"2b\" in database.sql:\n"));
+        acutPrintf(_T("[TrinityCore]   ALTER TABLE neuron ADD COLUMN code ... VIRTUAL,\n"));
+        acutPrintf(_T("[TrinityCore]                  ADD UNIQUE KEY idx_code (code);\n"));
+    }
 }
 
 // ============================================
@@ -171,8 +226,23 @@ void TrinityCore::logQueryError(const char* context, const std::string& query) {
 // ============================================
 // ЗАГРУЗКА НЕЙРОНА ПО КОДУ
 // ============================================
+// ВАЖНО (индекс): условие WHERE намеренно оставлено в форме
+//   JSON_UNQUOTE(JSON_EXTRACT(data, '$.code')) = '<код>'
+// — посимвольно идентичной определению виртуального столбца
+// neuron.code (см. database.sql). Только при точном совпадении
+// выражения оптимизатор MySQL подставляет генерируемый столбец
+// и использует уникальный индекс idx_code (type=ref, 1 строка).
+// Любая «оптимизация» вида data->>'$.code', JSON_VALUE(...) или
+// UPPER(...) сломает match и вернёт полный скан таблицы.
+// Проверка плана: EXPLAIN SELECT ... (ожидается key=idx_code).
 TrinityNeuron* TrinityCore::loadNeuronByCode(const std::string& code) {
     if (!ensureConnected()) return nullptr;
+
+    // Пустой код — заведомо отсутствующая сущность: нейроны без $.code
+    // имеют NULL в виртуальном столбце, а сравнение '= '\'\'' в индексе
+    // ничего не найдёт. Раньше такой запрос всё равно уходил на сервер
+    // (сетевой RTT + парсинг) при каждом рекурсивном вызове сборки.
+    if (code.empty()) return nullptr;
 
     const std::string query =
         "SELECT id, "
@@ -240,6 +310,13 @@ TrinityNeuron* TrinityCore::loadNeuronById(int id) {
 // ============================================
 // ЗАГРУЗКА ДЕТЕЙ ЧЕРЕЗ SYNAPSE
 // ============================================
+// Производительность: фильтр по коду ребёнка (n.is_deleted = 0 и выборка
+// $.code) идёт уже после обращения к synapse по индексу idx_parent, поэтому
+// полного скана neuron здесь нет. Выражение JSON_UNQUOTE(JSON_EXTRACT(
+// n.data, '$.code')) оставлено без изменений намеренно — оно совпадает с
+// определением виртуального столбца neuron.code и при необходимости может
+// быть обслужено уникальным индексом idx_code (например, если оптимизатор
+// выберет join-порядок child -> parent). См. комментарий в loadNeuronByCode.
 std::vector<TrinitySynapse> TrinityCore::loadChildren(int parentId) {
     std::vector<TrinitySynapse> children;
     if (!ensureConnected()) return children;
