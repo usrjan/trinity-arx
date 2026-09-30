@@ -22,7 +22,9 @@
 // ============================================================
 // Порядок:
 //   1. tempDb — временная база
-//   2. Слой материала
+//   2. Слои (_bolt, _tag, слой материала) создаются ОДИН РАЗ — здесь,
+//      до сборки геометрии; wblock переносит их в чистую базу вместе
+//      с объектами, повторного создания слоёв после wblock НЕ требуется.
 //   3. build() → солид (щит/планка/стенка)
 //   4. appendAcDbEntity(solidId, solid) — БЕЗ close()
 //   5. Если rib → болты (drawBoltMarkers)
@@ -30,14 +32,28 @@
 //   7. solid->close() — ПОСЛЕ всех операций
 //   8. Атрибуты (DETAIL_CODE на слое _tag)
 //   9. wblock → cleanDb
-//  10. Переназначение слоёв: solid → материал, circle → _bolt, attr → _tag
+//  10. Назначение слоёв объектам в чистой базе (единственный механизм
+//      переназначения): solid → материал, circle → _bolt, attr → _tag.
+//      Слои к этому моменту в cleanDb уже существуют (п. 2), поэтому
+//      setLayer не может упасть на eLayerNotFound.
 // ============================================================
 AcDbDatabase* TrinityBuildEngine::buildDetail(const TrinityNeuron& detail) {
     AcDbDatabase* tempDb = new AcDbDatabase(Adesk::kTrue, Adesk::kTrue);
     if (!tempDb) return nullptr;
 
-    // Слой материала
+    // Слои создаются ОДИН РАЗ — до сборки геометрии. wblock переносит их
+    // в чистую базу вместе с объектами, поэтому повторного создания слоёв
+    // после wblock нет (была избыточная работа: тот же набор ensure*-вызовов
+    // дублировался до и после wblock).
+    std::string layer = TrinityLayerManager::layerName(detail.material);
+    // Фикс AV: точный размер вместо wchar_t[256] (при переполнении буфер
+    // оставался неинициализированным — setLayer читал мусор стека).
+    std::wstring layerW = utf8ToWide(layer);
     TrinityLayerManager::createOrGetLayer(tempDb, detail.material);
+    if (detail.category == "rib") {
+        TrinityLayerManager::ensureBoltLayer(tempDb);
+    }
+    TrinityAttributeBuilder::ensureTagLayer(tempDb);
 
     // Строим геометрию
     AcDb3dSolid* solid = TrinityGeometryBuilder::build(detail);
@@ -46,11 +62,7 @@ AcDbDatabase* TrinityBuildEngine::buildDetail(const TrinityNeuron& detail) {
         return nullptr;
     }
 
-    // Назначаем слой
-    std::string layer = TrinityLayerManager::layerName(detail.material);
-    // Фикс AV: точный размер вместо wchar_t[256] (при переполнении буфер
-    // оставался неинициализированным — setLayer читал мусор стека).
-    std::wstring layerW = utf8ToWide(layer);
+    // Назначаем слой материала (слой уже создан выше)
     if (!layerW.empty()) solid->setLayer(layerW.c_str());
 
     // Получаем Model Space
@@ -101,10 +113,9 @@ AcDbDatabase* TrinityBuildEngine::buildDetail(const TrinityNeuron& detail) {
     }
 
     // ============================================================
-    // БОЛТЫ ДЛЯ ПЛАНОК
+    // БОЛТЫ ДЛЯ ПЛАНОК (слой _bolt уже создан в начале функции)
     // ============================================================
     if (detail.category == "rib") {
-        TrinityLayerManager::ensureBoltLayer(tempDb);
         TrinityGeometryBuilder::drawBoltMarkers(detail, pMs, ids);
     }
 
@@ -197,9 +208,8 @@ AcDbDatabase* TrinityBuildEngine::buildDetail(const TrinityNeuron& detail) {
     ids.append(solidId);
 
     // ============================================================
-    // АТРИБУТЫ (DETAIL_CODE на слое _tag)
+    // АТРИБУТЫ (DETAIL_CODE на слое _tag, создан в начале функции)
     // ============================================================
-    TrinityAttributeBuilder::ensureTagLayer(tempDb);
     AcDbObjectId attrId = TrinityAttributeBuilder::addDetailCode(pMs, detail.code);
     if (attrId != AcDbObjectId::kNull) {
         ids.append(attrId);
@@ -235,18 +245,13 @@ AcDbDatabase* TrinityBuildEngine::buildDetail(const TrinityNeuron& detail) {
     }
 
     // ============================================================
-    // СОЗДАЁМ СЛОИ В ЧИСТОЙ БАЗЕ
-    // ============================================================
-    TrinityLayerManager::createOrGetLayer(cleanDb, detail.material);
-    TrinityAttributeBuilder::ensureTagLayer(cleanDb);
-
-    // Если это планка — создаём и слой _bolt
-    if (detail.category == "rib") {
-        TrinityLayerManager::ensureBoltLayer(cleanDb);
-    }
-
-    // ============================================================
-    // ПЕРЕНАЗНАЧАЕМ СЛОИ ОБЪЕКТАМ
+    // ПЕРЕНАЗНАЧАЕМ СЛОИ ОБЪЕКТАМ В ЧИСТОЙ БАЗЕ
+    // Единственный механизм работы со слоями: слои (_bolt, _tag, слой
+    // материала) уже перенесены в cleanDb самим wblock из tempDb —
+    // повторного createOrGetLayer/ensure* здесь НЕ было и нет.
+    // setLayer выполняется по точным типам объектов (solid → материал,
+    // circle → _bolt, attr → _tag), потому что wblock присваивает всем
+    // перенесённым объектам слой "0".
     // ============================================================
     AcDbBlockTable* pBt2 = nullptr;
     Acad::ErrorStatus esBt2 = cleanDb->getSymbolTable(pBt2, AcDb::kForRead);
@@ -279,14 +284,12 @@ AcDbDatabase* TrinityBuildEngine::buildDetail(const TrinityNeuron& detail) {
         return nullptr;
     }
 
-    std::wstring matLayerW = utf8ToWide(layer);  // фикс AV: точный размер
-
     for (pIter->start(); !pIter->done(); pIter->step()) {
         AcDbEntity* pEnt = nullptr;
         if (pIter->getEntity(pEnt, AcDb::kForWrite) == Acad::eOk && pEnt) {
             if (pEnt->isKindOf(AcDb3dSolid::desc())) {
-                if (!matLayerW.empty())
-                    pEnt->setLayer(matLayerW.c_str());  // солид → материал
+                if (!layerW.empty())
+                    pEnt->setLayer(layerW.c_str());    // солид → материал
             } else if (pEnt->isKindOf(AcDbCircle::desc())) {
                 pEnt->setLayer(_T("_bolt"));       // кружочек → _bolt
             } else {
