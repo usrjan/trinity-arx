@@ -225,45 +225,73 @@ AcDbObjectId TrinityFileManager::attachXref(
             AcDbBlockTableRecord* pBlockRec = nullptr;
             es = pBlockTable->getAt(nameW.c_str(), pBlockRec, AcDb::kForRead);
             if (es == Acad::eOk && pBlockRec) {
+                // ID записи захватываем, пока запись открыта: он нужен и для
+                // ветки удаления устаревшего XREF ниже.
+                const AcDbObjectId recId = pBlockRec->objectId();
+
                 // Если это XREF — проверяем, существует ли файл
                 if (pBlockRec->isFromExternalReference()) {
                     // Получаем путь к внешнему файлу через AcString
                     AcString xrefPath;
                     Acad::ErrorStatus pathEs = pBlockRec->pathName(xrefPath);
-                    
+
                     bool fileExists = false;
                     if (pathEs == Acad::eOk) {
                         fileExists = (_waccess(xrefPath.kwszPtr(), 0) == 0);
                     }
-                    
+
                     if (!fileExists) {
-                        // Файл удалён — нужно удалить старый блок и вставить заново
+                        // Файл удалён — нужно удалить старый блок и вставить заново.
+                        // ВАЖНО (фикс игнорирования ошибок API): раньше здесь
+                        // вызывался pBlockTable->upgradeOpen() без проверки
+                        // результата. upgradeOpen() может вернуть ошибку
+                        // (например eReadonlyDictionary, если база открыта
+                        // только для чтения) — код этого не замечал и тут же
+                        // делал getAt(..., kForWrite) на всё ещё read-only
+                        // таблице: модификация закрытой на запись объекта —
+                        // undefined behavior, приводивший к Access Violation
+                        // внутри acad.exe.
+                        // Решение: никакого ручного upgradeOpen() — штатный
+                        // путь ObjectARX для удаления записи символической
+                        // таблицы по ID: eraseAcDbSymbolRecord() сам открывает
+                        // запись на запись, проверяет все ошибки и корректно
+                        // отвязывает XREF от его папки (block table record
+                        // folder) перед удалением. Результат проверяется.
                         pBlockRec->close();
-                        pBlockTable->upgradeOpen();
-                        
-                        // Открываем для записи и удаляем
-                        AcDbBlockTableRecord* pOldRec = nullptr;
-                        es = pBlockTable->getAt(nameW.c_str(), pOldRec, AcDb::kForWrite);
-                        if (es == Acad::eOk && pOldRec) {
-                            pOldRec->erase();
-                            pOldRec->close();
-                        }
                         pBlockTable->close();
-                        
+
+                        const Acad::ErrorStatus eraseEs = eraseAcDbSymbolRecord(recId);
+                        if (eraseEs != Acad::eOk) {
+                            acutPrintf(_T("\n[FileManager] Cannot remove stale XREF '%ls' (error %d)\n"),
+                                       nameW.c_str(), (int)eraseEs);
+                            // Старый блок остался в таблице — вставлять
+                            // заново под тем же именем нельзя (получим
+                            // eDuplicateKey), прерываем операцию.
+                            return AcDbObjectId::kNull;
+                        }
+
                         // Теперь блока нет — будем вставлять заново
                         blockId = AcDbObjectId::kNull;
                         wasInserted = false;
                     } else {
                         pBlockRec->close();
-                        pBlockTable->getAt(nameW.c_str(), blockId);
+                        // Фикс игнорирования ошибок API: результат getAt()
+                        // проверяется (has() выше не гарантирует отсутствие
+                        // гонки/ошибки БД); при неудаче blockId останется
+                        // kNull и шаг 2 вставит блок заново.
+                        if (pBlockTable->getAt(nameW.c_str(), blockId) != Acad::eOk) {
+                            blockId = AcDbObjectId::kNull;
+                        }
                         pBlockTable->close();
-                        wasInserted = true;
+                        wasInserted = (blockId != AcDbObjectId::kNull);
                     }
                 } else {
                     pBlockRec->close();
-                    pBlockTable->getAt(nameW.c_str(), blockId);
+                    if (pBlockTable->getAt(nameW.c_str(), blockId) != Acad::eOk) {
+                        blockId = AcDbObjectId::kNull;
+                    }
                     pBlockTable->close();
-                    wasInserted = true;
+                    wasInserted = (blockId != AcDbObjectId::kNull);
                 }
             } else {
                 if (pBlockRec) pBlockRec->close();
