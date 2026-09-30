@@ -34,6 +34,34 @@ bool TrinityCore::connect(const char* host, const char* user,
                            const char* pass, const char* db) {
     if (m_connected) return true;
 
+    // ------------------------------------------------------------
+    // КУПОЛ ДОСТУПНОСТИ (circuit breaker) — первая линия защиты UI.
+    // Если подряд уже было достаточно неудач подключения и интервал
+    // OPEN ещё не истёк — ОТКАЗЫВАЕМ мгновенно, не трогая сетевой
+    // стек. Без этой проверки каждый тик 5-секундного таймера при
+    // мёртвом сервере означал бы до 5 секунд блокировки главного
+    // потока AutoCAD (нетворк-таймаут mysql_real_connect) — интерфейс
+    // «зависал» бесконечно. Здесь же отказ стоит ~микросекунды.
+    // Исключение: явный вызов с ДРУГИМИ параметрами (переконфигури-
+    // рование через TRINITY_START) — такие вызовы проходят мимо ку-
+    // пола, см. resetBreaker() ниже по тексту connect().
+    // ------------------------------------------------------------
+    if (m_breaker.isTripped()) {
+        // Сообщаем редко: только когда оператор сам дёрнул команду,
+        // а не на каждый заблокированный тик таймера (тик-лог был бы
+        // бесполезным шумом). Понять «тихий» режим можно по статусу
+        // TRINITY_STATUS / открытому куполу в логе срабатывания.
+        static ULONGLONG s_lastMsgTick = 0;
+        const ULONGLONG now = GetTickCount64();
+        if (now - s_lastMsgTick > 60000) {   // не чаще раза в минуту
+            s_lastMsgTick = now;
+            acutPrintf(_T("\n[TrinityCore] DB unavailable: circuit breaker OPEN, retries paused %u s.\n"),
+                       static_cast<unsigned>(TrinityDbBreaker::kOpenIntervalMs / 1000));
+            acutPrintf(_T("[TrinityCore] Use TRINITY_START to retry immediately after fixing the server.\n"));
+        }
+        return false;
+    }
+
     // Запоминаем параметры — они пригодятся ensureConnected() для
     // автоматического переподключения после обрыва.
     m_host = host ? host : "";
@@ -46,11 +74,17 @@ bool TrinityCore::connect(const char* host, const char* user,
     m_mysql = mysql_init(nullptr);
     if (!m_mysql) {
         acutPrintf(_T("\n[TrinityCore] mysql_init failed\n"));
+        // Локальный сбой инициализации библиотеки (не сеть) — в купол
+        // не пишем: повторная попытка тоже упадёт мгновенно, UI не по-
+        // страдает, а ложный «трип» лишь запутает диагностику.
         return false;
     }
 
     // Таймауты: без них блокирующий TCP-запрос при «зависшем» сервере
     // может подвесить поток таймера AutoCAD на минуты.
+    // С куполом эти значения работают ТОЛЬКО на первых kFailureThreshold
+    // попытках и на HALF-OPEN пробной проверке — дальше запросы к сети
+    // вообще не уходят, поэтому UI защищён даже при крупных таймаутах.
     unsigned int connectTimeoutSec = 5;
     unsigned int readTimeoutSec    = 15;
     mysql_options(m_mysql, MYSQL_OPT_CONNECT_TIMEOUT, &connectTimeoutSec);
@@ -61,12 +95,33 @@ bool TrinityCore::connect(const char* host, const char* user,
         acutPrintf(_T("\n[TrinityCore] Connection error (%u): %hs\n"),
                    mysql_errno(m_mysql), mysql_error(m_mysql));
         closeHandle();
+
+        // Ошибка аутентификации (bad login/password, доступ с хоста за-
+        // прещён) НЕ бывает транзитной: долбить сервер бессмысленно,
+        // открываем купол немедленно, пропустив накопление порога.
+        const unsigned int errNo = mysql_errno(m_mysql);
+        if (errNo == 1045 || errNo == 1044 || errNo == 1130) {
+            while (!m_breaker.recordFailure()) { /* добиваем порог молча */ }
+            acutPrintf(_T("[TrinityCore] Authentication error: breaker opened immediately.\n"));
+        } else if (m_breaker.recordFailure()) {
+            // Достигнут порог обычных сетевых неудач — купол только что
+            // открылся. Одно внятное предупреждение на всё срабатывание.
+            acutPrintf(_T("\n[TrinityCore] CIRCUIT BREAKER OPEN after %d failed attempts.\n"),
+                       TrinityDbBreaker::kFailureThreshold);
+            acutPrintf(_T("[TrinityCore] DB calls will fail FAST (no UI freezes) for %u s, then one probe attempt.\n"),
+                       static_cast<unsigned>(TrinityDbBreaker::kOpenIntervalMs / 1000));
+        }
         return false;
     }
 
     mysql_set_character_set(m_mysql, "utf8mb4");
     mysql_query(m_mysql, "SET NAMES utf8mb4");
     m_connected = true;
+
+    // Успех — купол закрываем, историю неудач забываем. Именно здесь
+    // HALF-OPEN пробная попытка «оздоравливает» систему: следующий тик
+    // уже пойдёт штатно и очередь pending-проектов возобновится сама.
+    m_breaker.recordSuccess();
 
     // Диагностика схемы: без уникального индекса neuron.idx_code поиск по
     // коду (loadNeuronByCode) работает полным сканом таблицы. Проверяем это
@@ -138,20 +193,52 @@ void TrinityCore::verifyCodeIndex() {
 // и таймер «тихо» тикал впустую. Теперь каждая операция начинается с
 // ensureConnected(): ping подтверждает живость, при обрыве выполняется
 // переподключение с сохранёнными параметрами и логирование в консоль.
+//
+// ЗАЩИТА UI (купол): обе сетевые ветки этого метода — mysql_ping() и
+// connect() — могут блокировать поток до своих таймаутов. Метод вызы-
+// вается КАЖДЫМ обращением к БД (каждый рекурсивный loadNeuronByCode
+// сборки!), поэтому без купола недоступный сервер означал бы десятки
+// последовательных 5-секундных пауз внутри одного тика таймера на глав-
+// ном потоке AutoCAD. Купол здесь:
+//   - входной фильтр isTripped(): мгновенный отказ, пока OPEN;
+//   - учёт исхода пинга: успех -> recordSuccess(), сетевой провал пинга
+//     -> recordFailure() (сервер молчит = сеть мертва);
+//   - connect() сам ведёт учёт своих неудач (см. реализацию).
 // ============================================
 bool TrinityCore::ensureConnected() {
+    // Купол открыт — НЕ пингуем и НЕ подключаемся: мгновенный отказ.
+    // Именно эта строка превращает «висячий» тик в холостой за ~мкс.
+    if (m_breaker.isTripped()) {
+        m_connected = false;   // чтобы isConnected()/статус не врали
+        return false;
+    }
+
     if (!m_mysql) {
         // Хэндла нет: если параметры подключения известны (после первой
         // неудачной попытки TSTART) — пробуем подключиться заново.
+        // Учёт неудач/успеха и фильтрация по куполу — внутри connect().
         if (!m_host.empty() && !m_db.empty())
             return connect(m_host.c_str(), m_user.c_str(), m_pass.c_str(), m_db.c_str());
         return false;
     }
 
-    if (m_connected && mysql_ping(m_mysql) == 0)
-        return true;   // соединение живо — быстрый путь
+    if (m_connected && mysql_ping(m_mysql) == 0) {
+        // Соединение живо — быстрый путь. Обнуляем счётчик неудач:
+        // успешный пинг между эпизодами нестабильности не должен
+        // «помнить» старые проблемы (порог считается ПОДРЯД идущими).
+        m_breaker.recordSuccess();
+        return true;
+    }
 
     unsigned int errNo = mysql_errno(m_mysql);
+
+    // Провал пинга из-за сети/сервера (пинг при живом TCP почти не пада-
+    // ет иначе) — считаем это неудачей доступности и кормим купол. При
+    // недостиженном пороге recordFailure() просто вернёт false — пере-
+    // подключение ниже попробуется штатно.
+    if (m_connected && isFatalConnectionError(errNo))
+        m_breaker.recordFailure();
+
     if (m_connected && !isFatalConnectionError(errNo)) {
         // mysql_ping упал не из-за обрыва (например, читается незавершённый
         // результат). Сбрасываем состояние и пробуем переподключиться ниже.
@@ -159,7 +246,7 @@ bool TrinityCore::ensureConnected() {
                    errNo, mysql_error(m_mysql));
     }
 
-    acutPrintf(_T("\n[TrinityCore] Connection lost (errno=%u). Reconnecting to '%hs'...\n"),
+    acutPrintf(_T("\n[TrinityCore] Connection lost (errno=%u). Reconnecting to '%hs'..."),
                errNo, m_host.c_str());
 
     // Полностью закрываем мёртвый хэндл: connect() при m_mysql == nullptr
@@ -168,13 +255,15 @@ bool TrinityCore::ensureConnected() {
     // на котором он уже выполнялся (недокументированное поведение libmysql).
     closeHandle();
 
-    // connect() запомнит/переиспользует параметры и выставит таймауты.
+    // connect() запомнит/переиспользует параметры, выставит таймауты и
+    // сам отчитается в купол об исходе (успех -> recordSuccess, отказ
+    // -> recordFailure + возможное открытие купола с предупреждением).
     if (connect(m_host.c_str(), m_user.c_str(), m_pass.c_str(), m_db.c_str())) {
-        acutPrintf(_T("[TrinityCore] Reconnected successfully.\n"));
+        acutPrintf(_T(" Reconnected successfully.\n"));
         return true;
     }
 
-    acutPrintf(_T("[TrinityCore] Reconnect failed. DB operations disabled until next retry.\n"));
+    acutPrintf(_T(" Reconnect failed. DB operations disabled until next retry.\n"));
     return false;
 }
 
@@ -506,6 +595,34 @@ bool TrinityCore::markNeuronError(int id, int maxAttempts, const std::string& re
         return false;
     }
     return true;
+}
+
+// ============================================
+// ДИАГНОСТИКА КУПОЛА ДЛЯ КОМАНДЫ TRINITY_STATUS
+// ============================================
+// Возвращает человекочитаемое состояние купола доступности БД:
+//   "CLOSED"            — штатный режим (возможны 1-2 уже учтённых
+//                         неудачи, но порога нет — сети доверяем);
+//   "OPEN (Xs left)"    — попытки подключения заблокированы, через X
+//                         секунд пройдёт одна HALF-OPEN пробная попыт-
+//                         ка. Именно в этом режиме UI AutoCAD больше
+//                         НЕ зависает на таймаутах MySQL;
+//   "HALF-OPEN (probe)" — интервал истёк, следующая операция получит
+//                         реальный шанс переподключиться.
+// Метод const и не трогает состояние — вызывать безопасно из любого
+// контекста (главный поток, обработчик команды).
+std::string TrinityCore::breakerState() const {
+    const unsigned long long opened = m_breaker.m_openedAtTick.load();
+    if (opened == 0)
+        return "CLOSED";
+
+    const unsigned long long elapsed = GetTickCount64() - opened;
+    if (elapsed >= TrinityDbBreaker::kOpenIntervalMs)
+        return "HALF-OPEN (next call probes the server)";
+
+    const unsigned long long leftSec =
+        (TrinityDbBreaker::kOpenIntervalMs - elapsed) / 1000;
+    return "OPEN (" + std::to_string(leftSec) + " s until probe)";
 }
 
 // ============================================
