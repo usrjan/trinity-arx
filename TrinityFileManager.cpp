@@ -178,7 +178,6 @@ bool TrinityFileManager::saveDwg(AcDbDatabase* db, const std::string& path) {
 
     Acad::ErrorStatus es = db->saveAs(w.c_str());
     if (es == Acad::eOk) {
-        //acutPrintf(_T("\n[FileManager] Saved: %ls\n"), pathW);
         return true;
     }
     acutPrintf(_T("\n[FileManager] Save failed: %ls (error %d)\n"), w.c_str(), es);
