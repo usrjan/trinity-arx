@@ -68,6 +68,9 @@
     <ClInclude Include="TrinityLayerManager.h">
       <Filter>Header Files</Filter>
     </ClInclude>
+    <ClInclude Include="TrinitySymbolUtils.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
     <ClInclude Include="TrinityConfig.h">
       <Filter>Header Files</Filter>
     </ClInclude>

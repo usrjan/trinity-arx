@@ -32,10 +32,12 @@
 #include <dbsymtb.h>
 #include <dbgroup.h>
 #include <dbapserv.h>
-// Утилиты над symbol tables: eraseAcDbSymbolRecord() и др.
-// (используется в TrinityFileManager::insertXref для безопасного
-//  удаления устаревших XREF-записей без ручного upgradeOpen())
-#include <acdbSymutil.h>
+// ВНИМАНИЕ: <acdbSymutil.h> здесь НЕ включается — такого заголовка нет в
+// поставке ObjectARX (ни 2026, ни ранее), поэтому MSVC выдавал
+// C1083 "Не удается открыть файл включение: acdbSymutil.h".
+// Функция eraseAcDbSymbolRecord() объявлена в "TrinitySymbolUtils.h"
+// (её реализация через стандартный API — там же) и подключается
+// локально только в тех .cpp, которые её используют.
 
 // ============================================
 // AutoCAD — 3D
