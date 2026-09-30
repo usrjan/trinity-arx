@@ -57,44 +57,33 @@ enum class DbQuery : int {
 };
 
 // ------------------------------------------------------------
-// Компилируемая склейка двух C-строковых литералов.
-// Зачем: тексты NeuronByCode / NeuronById / PendingProjects собираются
-// из общих констант списков столбцов — именно так устраняется прежнее
-// четырёхкратное дублирование SELECT-полей, но реестр остаётся статиче-
-// ским (без heap до первого использования, безопасно для ARX DLL).
-// Только constexpr-операции над массивами фиксированного размера;
-// std::string намеренно не используется.
-// Tag — уникальный тип-маркер инстанцирования: без него разные склейки
-// одинаковой длины слились бы в один объект и нарушили ODR.
+// ОБЩИЕ КУСКИ SQL (устранение дублирования списков столбцов)
 // ------------------------------------------------------------
-template <class Tag, size_t N, size_t M>
-struct SqlConcat {
-    char buf[N + M];                    // итоговая строка + '\0' (байт запаса)
-    constexpr SqlConcat(const char (&a)[N], const char (&b)[M]) : buf{} {
-        // a и b содержат собственные '\0'; склеиваем содержимое без них,
-        // финальный нультерминатор уже обеспечен value-initialization'ом.
-        for (size_t i = 0; i + 1 < N; ++i) buf[i] = a[i];
-        for (size_t j = 0; j + 1 < M; ++j) buf[N - 1 + j] = b[j];
-    }
-};
-
-// Общие куски SQL (определены в TrinityDbStatements.cpp).
-extern const char kNeuronSelectCols[];      // SELECT карточки нейрона (7 колонок)
-extern const char kProjectSelectCols[];     // SELECT очереди проектов (7 колонок)
-extern const char kWhereByCode[];           // FROM/WHERE по виртуальному code
-extern const char kWhereById[];             // FROM/WHERE по PRIMARY KEY id
-extern const char kPendingProjectsTail[];   // FROM/WHERE очереди сборки
-
-// Теги инстанцирования склеек — по одному на каждую сборку текста.
-struct TagNeuronByCode {};
-struct TagNeuronById {};
-struct TagPendingProjects {};
-
-// Собранные тексты запросов (constexpr-объекты в .cpp; буферы buf жи-
-// вут в статической области модуля всё время жизни процесса).
-extern const SqlConcat<TagNeuronByCode, sizeof(kNeuronSelectCols), sizeof(kWhereByCode)> sqlNeuronByCode;
-extern const SqlConcat<TagNeuronById, sizeof(kNeuronSelectCols), sizeof(kWhereById)> sqlNeuronById;
-extern const SqlConcat<TagPendingProjects, sizeof(kProjectSelectCols), sizeof(kPendingProjectsTail)> sqlPendingProjects;
+// Тексты NeuronByCode / NeuronById / PendingProjects собираются из об-
+// щих фрагментов — именно так лечится прежнее четырёхкратное дублиро-
+// вание SELECT-полей. Фрагменты объявлены здесь как указатели на
+// NULL-терминированные строки, а ОПРЕДЕЛЕНЫ (реальные массивы char[])
+// в TrinityDbStatements.cpp.
+//
+// ПОЧЕМУ НЕ extern-массивы фиксированного размера: sizeof() от объяв-
+// ления «extern const char arr[]» — неполный тип «const char []», ком-
+// пилятор выдаёт C2070 в любой TU, кроме той, где массив определён.
+// Указатель же полноразмерен везде; длина доступна только через strlen
+// — этого достаточно, потому что склейка выполняется ОДИН РАЗ при ини-
+// циализации реестра (см. dbRegistry() в .cpp), а не на каждом запросе.
+//
+// Синтаксис WHERE по коду/статусу обязан посимвольно совпадать с опре-
+// делениями виртуальных столбцов neuron.code / neuron.job_status (см.
+// database.sql) — иначе оптимизатор не подставит генерируемый столбец
+// и уникальные индексы idx_code / idx_job_status_queue не будут исполь-
+// зованы. Выражения JSON_UNQUOTE(JSON_EXTRACT()) менять ни на ->>, ни
+// на JSON_VALUE нельзя (проверка плана: EXPLAIN).
+// ------------------------------------------------------------
+extern const char* const kNeuronSelectCols;      // SELECT карточки нейрона (7 колонок)
+extern const char* const kProjectSelectCols;     // SELECT очереди проектов (7 колонок)
+extern const char* const kWhereByCode;           // FROM/WHERE по виртуальному code
+extern const char* const kWhereById;             // FROM/WHERE по PRIMARY KEY id
+extern const char* const kPendingProjectsTail;   // FROM/WHERE очереди сборки
 
 // Описание одного подготовленного запроса в реестре.
 struct DbQueryDef {
@@ -141,12 +130,16 @@ struct DbParam {
 // ------------------------------------------------------------
 // Колонки лежат в порядке SELECT-столбцов конкретного запроса реестра
 // (для нейрона: id, code, type, category, material, status, data — см.
-// parseNeuronRow). Числовые колонки приходят как longlong, текстовые —
-// уже скопированы в std::string: буферы стейтмента переиспользуются на
-// следующем fetch, держать в них ссылки нельзя. SQL NULL -> "" — ровно
-// как в старом парсере текстового протокола (nullptr-ячейка -> "").
+// parseNeuronRowFromDb). Числовые колонки приходят как long long (стан-
+// дартный тип C++: макрос- typedef longlong из внутренних заголовков
+// MySQL my_global.h намеренно НЕ используется — он определён только при
+// сборке с MY_GLOBAL_INCLUDED и создавал хрупкую зависимость, из-за ко-
+// торой заголовок ломался в TU без полного mysql-контекста). Текстовые
+// колонки уже скопированы в std::string: буферы стейтмента переисполь-
+// зуются на следующем fetch, держать в них ссылки нельзя. SQL NULL -> ""
+// — ровно как в старом парсере текстового протокола (nullptr -> "").
 struct DbRow {
-    longlong                  id = 0;       // колонка [0] — всегда числовая (PK)
+    long long                 id = 0;       // колонка [0] — всегда числовая (PK)
     std::vector<std::string>  cols;         // остальные колонки по порядку
 
     // Доступ по индексу с защитой от выхода (пустая строка вместо UB).
