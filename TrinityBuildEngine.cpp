@@ -568,13 +568,12 @@ std::string TrinityBuildEngine::ensureFileExists(const std::string& code, int de
         // Загружаем нейрон по коду (использует уникальный индекс idx_code
         // по виртуальному столбцу `code`, добавленный в схеме БД, — поиск
         // за O(log N) вместо full table scan).
-        TrinityNeuron* pNeuron = m_core.loadNeuronByCode(code);
-        if (!pNeuron) break;                 // нет записи / ошибка БД
+        auto optNeuron = m_core.loadNeuronByCode(code);
+        if (!optNeuron) break;               // нет записи / ошибка БД
 
-        // Копируем данные во избежание висячего указателя: объект
-        // принадлежит внутреннему пулу ядра и может быть освобождён.
-        TrinityNeuron neuron = *pNeuron;
-        delete pNeuron;
+        // optional возвращает карточку по значению — копия делается
+        // перемещением (move), сырой указатель и delete больше не нужны.
+        TrinityNeuron neuron = std::move(*optNeuron);
 
         // Подкаталог и путь — через единый хелпер FileManager
         std::string subdir = m_files.subdirForType(neuron.type);
@@ -896,12 +895,11 @@ void TrinityBuildEngine::deleteProjectFiles(const std::string& code) {
     // Пустой код — нечего удалять (защита от битых synapse.child_code)
     if (code.empty()) return;
 
-    // Загружаем нейрон
-    TrinityNeuron* pNeuron = m_core.loadNeuronByCode(code);
-    if (!pNeuron) return;
+    // Загружаем нейрон (std::optional — без сырых указателей и ручного delete)
+    auto optNeuron = m_core.loadNeuronByCode(code);
+    if (!optNeuron) return;
 
-    TrinityNeuron neuron = *pNeuron;
-    delete pNeuron;
+    TrinityNeuron neuron = std::move(*optNeuron);
 
     // Подкаталог и путь к файлу — через единый хелпер FileManager
     std::string subdir = m_files.subdirForType(neuron.type);
