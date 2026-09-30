@@ -2,6 +2,7 @@
 #pragma once
 #include "StdAfx.h"
 #include "TrinityCore.h"
+#include <vector>   // std::vector — списки точек (AcGePoint3d)
 
 class TrinityGeometryBuilder {
 public:
