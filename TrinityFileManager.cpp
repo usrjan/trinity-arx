@@ -1,6 +1,9 @@
 // TrinityFileManager.cpp
 #include "StdAfx.h"
 #include "TrinityFileManager.h"
+// eraseAcDbSymbolRecord() — собственная реализация вместо несуществующего
+// ObjectARX-заголовка <acdbSymutil.h> (см. TrinitySymbolUtils.h).
+#include "TrinitySymbolUtils.h"
 // Примечание: <io.h>/<direct.h> уже включены через StdAfx.h — дубли убраны.
 // Конвертация UTF-8 -> std::wstring берётся из общего хелпера utf8ToWide()
 // (StdAfx.h/.cpp) — локальная копия утилиты удалена как дубль.

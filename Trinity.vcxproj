@@ -116,6 +116,8 @@
     <ClInclude Include="TrinityFileManager.h" />
     <ClInclude Include="TrinityGeometryBuilder.h" />
     <ClInclude Include="TrinityLayerManager.h" />
+    <!-- eraseAcDbSymbolRecord(): замена отсутствующего в ObjectARX <acdbSymutil.h> -->
+    <ClInclude Include="TrinitySymbolUtils.h" />
     <ClInclude Include="TrinityTimer.h" />
     <ClInclude Include="stdafx.h" />
   </ItemGroup>
