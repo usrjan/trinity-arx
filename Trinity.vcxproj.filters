@@ -19,6 +19,11 @@
     <ClCompile Include="TrinityCore.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
+    <!-- Реестр prepared statements: определение dbRegistry(). Без этого
+         файла в сборке — LNK2019 на unresolved external dbRegistry. -->
+    <ClCompile Include="TrinityDbStatements.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
     <ClCompile Include="TrinityFileManager.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
@@ -49,6 +54,9 @@
       <Filter>Header Files</Filter>
     </ClInclude>
     <ClInclude Include="TrinityCore.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="TrinityDbStatements.h">
       <Filter>Header Files</Filter>
     </ClInclude>
     <ClInclude Include="TrinityFileManager.h">
