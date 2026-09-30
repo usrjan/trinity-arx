@@ -2,6 +2,8 @@
 #pragma once
 #include "StdAfx.h"
 #include <atomic>   // std::atomic — состояние купола доступности БД (TrinityDbBreaker)
+#include <array>    // std::array — реестр prepared statements (m_stmts)
+#include "TrinityDbStatements.h"   // DbQuery, StmtGuard — реестр prepared statements
 
 // ============================================
 // ПОЗИЦИЯ
@@ -198,8 +200,52 @@ class TrinityCore {
     // цессу плагина и обнуляется вместе с ним.
     TrinityDbBreaker m_breaker;
 
+    // ------------------------------------------------------------
+    // РЕЕСТР ПОДГОТОВЛЕННЫХ ЗАПРОСОВ (prepared statements)
+    // ------------------------------------------------------------
+    // Индекс массива = значение enum DbQuery (TrinityDbStatements.h);
+    // тексты SQL живут в единственном экземпляре в g_dbQueries.
+    // Хэндлы MYSQL_STMT* привязаны к КОНКРЕТНОМУ соединению: при пере-
+    // подключении после обрыва старый MYSQL* уничтожается вместе со все-
+    // ми стейтментами — поэтому реестр пересобирается в prepareState-
+    // ments() после каждого успешного connect() и полностью освобождает-
+    // ся в finalizeStatements() перед любым closeHandle(). StmtGuard —
+    // RAII: mysql_stmt_close гарантирован даже при раннем выходе.
+    std::array<StmtGuard, static_cast<size_t>(DbQuery::Count)> m_stmts;
+
     // Полное закрытие старого хэндла перед новым mysql_init
     void closeHandle();
+
+    // ---- Служебные методы слоя prepared statements ----
+
+    // COM_STMT_PREPARE для всех запросов реестра. Вызывается из connect()
+    // после успешного mysql_real_connect(). Если хотя бы один запрос не
+    // подготовился (например, в старой схеме нет виртуального столбца) —
+    // возвращает false; вызывающий код переводит ядро в текстовый режим:
+    // executeSelect/executeUpdate в этом случае падают с внятной ошибкой,
+    // а оператор получает предупреждение подготовить схему.
+    bool prepareStatements();
+
+    // Закрыть все открытые стейтменты (перед mysql_close / реконнектом).
+    void finalizeStatements();
+
+    // Исполнить SELECT из реестра и вернуть набор строк результата.
+    // params — значения для плейсхолдеров '?' (строки/числа через DbParam);
+    // на выход getRow() отдаёт строки в порядке колонок запроса.
+    // Возвращает false при любой ошибке (подготовка/биндинг/execute/fetch),
+    // ошибку логирует logStmtError(). Пустой результат — это true + 0 строк.
+    bool runSelect(DbQuery q, const std::vector<struct DbParam>& params,
+                   class DbResult& out);
+
+    // Исполнить «пишущий» запрос (UPDATE) из реестра. Семантика ошибок —
+    // как у runSelect. affected rows не проверяется: UPDATE по несущест-
+    // вующему id не считается ошибкой (проект могли удалить параллельно).
+    bool runUpdate(DbQuery q, const std::vector<struct DbParam>& params);
+
+    // Логирование ошибки стейтмента (errno/errmsg + имя запроса из реестра).
+    // При фатальных кодах обрыва помечает соединение мёртвым для реконнекта —
+    // ровно как прежний logQueryError для текстовых запросов.
+    void logStmtError(DbQuery q, const char* stage);
 
 public:
     TrinityCore() = default;
@@ -238,12 +284,20 @@ public:
 private:
     // Логирование ошибки последнего неудачного mysql_query в консоль AutoCAD.
     // При фатальных кодах обрыва помечает соединение мёртвым для реконнекта.
+    // Используется только legacy-путями (escapeSqlLiteral/verifyCodeIndex),
+    // которые остались на текстовом протоколе; рабочие запросы ядра логируют
+    // ошибки через logStmtError() (prepared statements).
     void logQueryError(const char* context, const std::string& query);
 
     // Проверка после подключения: существует ли уникальный индекс neuron.idx_code
     // (он покрывает виртуальный столбец code и обязателен, чтобы loadNeuronByCode()
     // не сканировал таблицу целиком). При отсутствии — предупреждение в консоль.
     void verifyCodeIndex();
+
+    // Парсинг строки результата SELECT из реестра (DbRow) в карточку нейрона.
+    // Порядок колонок = kNeuronSelectCols / kProjectSelectCols:
+    //   cols[0]=code, [1]=type, [2]=category, [3]=material, [4]=status, [5]=data
+    static TrinityNeuron parseNeuronRowFromDb(const DbRow& r);
 
 public:
 
@@ -295,9 +349,19 @@ public:
     // Экранирование строки для безопасной подстановки в SQL (учитывает кодировку соединения).
     // Возвращает готовый литерал с кавычками: 'escaped\'text' — подставляется в запрос как есть.
     // Пустая строка -> NULL (для необязательных параметров).
+    // !!! LEGACY: после перехода ядра на prepared statements (см. Trini-
+    // tyDbStatements.h) ни один рабочий запрос плагина эту функцию НЕ ис-
+    // пользует — значения уходят серверу бинарно через MYSQL_BIND, и эк-
+    // ранирование не нужно. Оставлена только для совместимости внешних
+    // вызовов и ручной диагностики; новый код обязан передавать данные
+    // параметрами DbParam, а не склейкой строк.
     std::string escapeSqlLiteral(const std::string& value, bool emptyMeansNull = false) const;
 
     // Парсинг
+    // LEGACY-парсеры строки текстового протокола (MYSQL_ROW). Рабочие ме-
+    // тоды ядра теперь получают данные через DbRow (prepared statements),
+    // см. parseNeuronRowFromDb(); эти функции оставлены только для диа-
+    // гностического кода на mysql_query() и тестов.
     static TrinityNeuron parseNeuronRow(MYSQL_ROW row);
     static TrinitySynapse parseSynapseRow(MYSQL_ROW row);
     static TrinityPosition parsePosition(const std::string& json);
