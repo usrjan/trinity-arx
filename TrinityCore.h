@@ -3,6 +3,8 @@
 #include "StdAfx.h"
 #include <atomic>   // std::atomic — состояние купола доступности БД (TrinityDbBreaker)
 #include <array>    // std::array — реестр prepared statements (m_stmts)
+#include <string>   // std::string — поля структур нейрона, параметры подключения
+#include <vector>   // std::vector — DbParam, наборы результатов запросов
 #include "TrinityDbStatements.h"   // DbQuery, StmtGuard — реестр prepared statements
 
 // ============================================

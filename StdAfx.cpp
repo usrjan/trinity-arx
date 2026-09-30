@@ -1,5 +1,6 @@
 // StdAfx.cpp
 #include "StdAfx.h"
+#include <string>   // std::string — аргумент utf8ToWide()
 
 // stringToWide()/utf2uni() — устаревшие небезопасные конвертеры (неза-
 // писанный мусор в буфере при переполнении / сырой malloc-буфер, требу-

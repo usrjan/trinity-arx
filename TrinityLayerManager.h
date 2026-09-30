@@ -1,6 +1,7 @@
 // TrinityLayerManager.h
 #pragma once
 #include "StdAfx.h"
+#include <string>   // std::string — имена слоёв, коды материалов
 
 class TrinityLayerManager {
 public:

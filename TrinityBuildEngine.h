@@ -3,7 +3,9 @@
 #include "StdAfx.h"
 #include "TrinityCore.h"
 #include "TrinityFileManager.h"
-#include <set>      // std::set — отслеживание активных кодов (защита от циклов графа)
+#include <set>            // std::set — отслеживание активных кодов (защита от циклов графа)
+#include <string>         // std::string — ключи/значения кэша и множеств
+#include <unordered_map>  // std::unordered_map — m_builtCache (кэш собранных файлов)
 
 class TrinityBuildEngine {
 private:
