@@ -91,6 +91,12 @@
     <ClCompile Include="TrinityBuildEngine.cpp" />
     <ClCompile Include="TrinityCommands.cpp" />
     <ClCompile Include="TrinityConfig.cpp" />
+    <!-- ВАЖНО: TrinityDbStatements.cpp ОБЯЗАТЕЛЕН в сборке. Именно здесь
+         определена функция dbRegistry() — единственный источник текстов
+         SQL (prepared statements). Если убрать этот файл из проекта,
+         линковка падает с LNK2019 на "?dbRegistry@@YAPEBUDbQueryDef@@XZ",
+         потому что TrinityCore::prepareStatements() ссылается на неё. -->
+    <ClCompile Include="TrinityDbStatements.cpp" />
     <ClCompile Include="TrinityCore.cpp" />
     <ClCompile Include="TrinityFileManager.cpp" />
     <ClCompile Include="TrinityGeometryBuilder.cpp" />
@@ -103,6 +109,8 @@
     <ClInclude Include="TrinityCommands.h" />
     <ClInclude Include="TrinityConfig.h" />
     <ClInclude Include="TrinityCore.h" />
+    <!-- Заголовок реестра SQL-запросов (enum DbQuery, DbQueryDef, StmtGuard). -->
+    <ClInclude Include="TrinityDbStatements.h" />
     <ClInclude Include="TrinityFileManager.h" />
     <ClInclude Include="TrinityGeometryBuilder.h" />
     <ClInclude Include="TrinityLayerManager.h" />

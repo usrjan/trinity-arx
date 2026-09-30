@@ -68,8 +68,16 @@ TrinityARX читает **нейроны** и **синапсы** из MySQL
 4. **Linker → Input → Additional Dependencies:**  
   `accore.lib;acad.lib;acui25.lib;adui25.lib;acpal.lib;acdb25.lib;acge25.lib;acgiapi.lib;acISMobj25.lib;rxapi.lib;acgeoment.lib;libmysql.lib`
 5. **Linker → General → Output File:** `$(OutDir)_$(ProjectName)$(TargetExt)` (для `_Trinity.arx`)
-6. Собрать **Debug x64** или **Release x64**
-7. Получится `_Trinity.arx`
+6. **Внимание — файлы в сборке.** Все `.cpp` исходники обязаны быть добавлены
+   в проект (`Trinity.vcxproj`, группа `ClCompile`). В частности,
+   `TrinityDbStatements.cpp` содержит определение `dbRegistry()` — единственного
+   источника текстов SQL для prepared statements. Если этот файл отсутствует в
+   проекте, компиляция проходит, но линковка падает с ошибкой:
+   `LNK2019: unresolved external symbol "struct DbQueryDef const * __cdecl dbRegistry(void)"`.
+   Файл уже зарегистрирован в `.vcxproj` и `.vcxproj.filters`; при пересоздании
+   проекта не забудьте добавить его снова.
+7. Собрать **Debug x64** или **Release x64**
+8. Получится `_Trinity.arx`
 
 
 ## Загрузка в AutoCAD
