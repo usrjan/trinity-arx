@@ -6,27 +6,20 @@
 // eraseAcDbSymbolRecord() — они были вымышленными. Здесь — собственная
 // inline-реализация той же функциональности поверх ШТАТНОГО API ObjectARX.
 //
-// Исправления относительно предыдущей версии файла (ошибки C3861 / C2039 /
-// C2065 / C2737):
-//   * acdbOpenAcDbSymbolTableRecord() — такой функции в ObjectARX нет;
-//     запись открывается стандартным acdbOpenObject() (объявлен в dbmain.h);
-//   * Acad::eFail — такого члена в enum Acad::ErrorStatus нет; вместо него
-//     возвращается реальный код ошибки открытия или Acad::eInvalidInput;
-//   * AcDbBlockTableRecord::detach() — метода с таким именем нет;
-//     "отвязка" внешнего файла выполняется установкой имени/пути XREF
-//     в пустую строку (setXrefDwgName(_T(""))), что переводит запись из
-//     external-reference в ordinary block без удаления содержимого блока.
+// Исправления относительно предыдущих версий файла (ошибки C3861 / C2039 /
+// C2065 / C2737): вместо вымышленных символов теперь используется только
+// документированный API ObjectARX: acdbOpenObject(), AcDbEntity::erase(),
+// Acad::eOk / eNullObjectId / eInvalidInput.
 //
 // Используется в TrinityFileManager для безопасного удаления устаревших
 // XREF-записей таблицы блоков БЕЗ ручного upgradeOpen(): запись открывается
 // на запись сама, все коды ошибок проверяются.
 //
 // ТРЕБУЕТСЯ: до этого заголовка должны быть включены StdAfx.h
-// (dbsymtb.h — классы таблиц символов, dbents.h — AcDbBlockTableRecord).
+// (dbsymtb.h — классы таблиц символов, dbmain.h — acdbOpenObject).
 #pragma once
 
-#include <dbsymtb.h>   // AcDbSymbolTableRecord / AcDbBlockTableRecord
-#include <dbents.h>
+#include <dbsymtb.h>   // AcDbSymbolTableRecord
 #include <dbmain.h>    // acdbOpenObject()
 
 // Удаляет запись символической таблицы (блок, слой, линетип, стиль и т.п.)
@@ -44,21 +37,11 @@ inline Acad::ErrorStatus eraseAcDbSymbolRecord(const AcDbObjectId& recId)
 
     if (!pRec) return Acad::eInvalidInput;   // защита от неожиданных API
 
-    // Если это запись блока-XREF — сначала "отвязываем" внешний файл
-    // (очищаем имя DWG-ссылки), иначе удалённая "на живую" ссылка оставляет
-    // базу в состоянии, при котором последующая вставка под тем же именем
-    // падает. setXrefDwgName() допустим только когда запись открыта на
-    // запись — условие обеспечено выше.
-    AcDbBlockTableRecord* pBtr = AcDbBlockTableRecord::cast(pRec);
-    if (pBtr && pBtr->isFromExternalReference()) {
-        const Acad::ErrorStatus detachEs =
-            pBtr->setXrefDwgName(_T(""));
-        if (detachEs != Acad::eOk) {
-            pRec->close();
-            return detachEs;
-        }
-    }
-
+    // Никакой предварительной "отвязки" внешнего файла не делаем: у
+    // AcDbBlockTableRecord нет таких методов, и они не нужны — удаление
+    // записи XREF через erase() легально, пока её родительская таблица
+    // открыта на запись (условие обеспечивает acdbOpenObject kForWrite
+    // выше); связанные ссылки на внешний файл AutoCAD обрабатывает сам.
     es = pRec->erase();   // помечает объект удалённым (в транзакции — если активна)
     pRec->close();        // обязательное закрытие при любом исходе
     return es;
