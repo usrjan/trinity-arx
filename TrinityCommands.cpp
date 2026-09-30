@@ -4,8 +4,14 @@
 #include "TrinityConfig.h"
 #include "TrinityTimer.h"   // безопасный таймер с document lock (см. TrinityTimer.h)
 
-TrinityBuildEngine* g_engine = nullptr;
-UINT_PTR g_timerId = 0;
+// ============================================================
+// ФАЙЛОВОЕ СОСТОЯНИЕ КОМАНД (наружу не торчит)
+// ============================================================
+// Раньше id таймера был глобалом `extern UINT_PTR g_timerId` в заго-
+// ловке — любой TU мог его испортить. Теперь это приватная деталь ре-
+// ализации команд: видна только здесь. Сам движок — синглтон engine()
+// из TrinityCommands.h (владение статическим объектом, без new/delete).
+static UINT_PTR s_timerId = 0;
 
 // Флаг «тик идёт прямо сейчас». Защита от наложения: если обработка
 // предыдущего тика ещё не завершилась (долгая сборка), новые тики
@@ -23,7 +29,7 @@ static bool g_isProcessing = false;
 // к Access Violation (крах acad.exe).
 // Сигнатура — простой void(): сигнатура Win32 TIMERPROC здесь не нужна,
 // т.к. низкоуровневый таймер-процедур инкапсулирован в TrinityTimer.
-void TimerProc() {
+static void TimerProc() {
     trinityProcess();
 }
 
@@ -32,32 +38,24 @@ void TimerProc() {
 // ============================================
 void trinityStart() {
     // Если таймер уже запущен — сначала останавливаем его
-    if (g_timerId != 0) {
+    if (s_timerId != 0) {
         acutPrintf(_T("\n[Trinity] Timer already running. Restarting...\n"));
         trinityStop();
     }
 
-    // Очищаем глобальный указатель на движок
-    if (g_engine) {
-        delete g_engine;
-        g_engine = nullptr;
-    }
-
     // Загружаем настройки из trinity.ini в папке библиотеки
-    TrinityDbConfig cfg;
-    if (!loadTrinityConfig(cfg)) {
+    TrinityConfig::DbConfig cfg;
+    if (!TrinityConfig::load(cfg)) {
         acutPrintf(_T("\n[Trinity] Config load failed. Startup aborted.\n"));
         return;
     }
 
-    // Создаём новый движок
-    g_engine = new TrinityBuildEngine(cfg.basePath);
-
-    if (!g_engine->init(cfg.host.c_str(), cfg.user.c_str(),
-                        cfg.pass.c_str(), cfg.db.c_str())) {
+    // Настраиваем единственный экземпляр движка (синглтон) и подключаемся.
+    // Пул объектов живёт всю жизнь DLL — повторные TSTART/TSTOP безопасны:
+    // connect()/disconnect() идемпотентны, никаких new/delete указателей.
+    if (!engine().init(cfg.host.c_str(), cfg.user.c_str(),
+                      cfg.pass.c_str(), cfg.db.c_str())) {
         acutPrintf(_T("\n[Trinity] Failed to connect to database\n"));
-        delete g_engine;
-        g_engine = nullptr;
         return;
     }
 
@@ -65,12 +63,11 @@ void trinityStart() {
     // AutoCAD, активный документ залочен на запись (см. TrinityTimer.cpp).
     // Прямой SetTimer(NULL, ...) с записью в БД без lock нарушал протокол
     // AutoCAD и вызывал Access Violation.
-    g_timerId = StartTrinityTimer(5000, TimerProc);
+    s_timerId = StartTrinityTimer(5000, TimerProc);
 
-    if (g_timerId == 0) {
+    if (s_timerId == 0) {
         acutPrintf(_T("\n[Trinity] Failed to start timer.\n"));
-        delete g_engine;
-        g_engine = nullptr;
+        engine().shutdown();   // соединение уже открыто — закрываем обратно
         return;
     }
 
@@ -82,17 +79,14 @@ void trinityStart() {
 // ============================================
 void trinityStop() {
     // Сначала останавливаем таймер
-    if (g_timerId != 0) {
+    if (s_timerId != 0) {
         StopTrinityTimer();
-        g_timerId = 0;
+        s_timerId = 0;
     }
 
-    // Очищаем движок
-    if (g_engine) {
-        g_engine->shutdown();
-        delete g_engine;
-        g_engine = nullptr;
-    }
+    // Останавливаем движок (идемпотентно: shutdown() можно звать повторно
+    // даже при незапущенном соединении — объект синглтона существует всегда).
+    engine().shutdown();
 
     acutPrintf(_T("\n[Trinity] Timer stopped.\n"));
 }
@@ -104,7 +98,10 @@ void trinityStop() {
 // при захваченном write-lock активного документа (гарантия TrinityTimer).
 // Именно поэтому здесь разрешено брать workingDatabase() и писать в неё.
 void trinityProcess() {
-    if (!g_engine) return;
+    // Движок считается готовым к работе, только когда соединение реально
+    // установлено (см. init/connect). Синглтон-ссылка не бывает null —
+    // признак «не запущено» проверяется через состояние ядра.
+    if (!engine().isConnected()) return;
 
     // Защита от реентерабельности/наложения тиков (долгая сборка > интервала).
     if (g_isProcessing) return;
@@ -112,7 +109,7 @@ void trinityProcess() {
 
     __try {
         AcDbDatabase* db = acdbHostApplicationServices()->workingDatabase();
-        int processed = g_engine->processAllProjects(db);
+        int processed = engine().processTick();
 
         // Обновление дисплея — тоже легально: мы под локом, на главном потоке.
         if (processed > 0) acedUpdateDisplay();
