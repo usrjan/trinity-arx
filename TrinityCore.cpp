@@ -20,11 +20,73 @@ TrinityCore::~TrinityCore() { disconnect(); }
 // ЗАКРЫТИЕ ХЭНДЛА
 // ============================================
 void TrinityCore::closeHandle() {
+    // Стейтменты привязаны к этому соединению: mysql_close("убьёт" и их.
+    // Закрываем первыми — иначе StmtGuard в деструкторе попытался бы за-
+    // крыть хэндлы уже мёртвого соединения (использование после free).
+    finalizeStatements();
+
     if (m_mysql) {
         mysql_close(m_mysql);   // mysql_close безопасен и для несоединённого хэндла
         m_mysql = nullptr;
     }
     m_connected = false;
+}
+
+// ============================================
+// ПОДГОТОВКА ВСЕХ ЗАПРОСОВ РЕЕСТРА
+// ============================================
+// Вызывается из connect() сразу после успешного mysql_real_connect().
+// COM_STMT_PREPARE выполняется ОДИН РАЗ за подключение: дальше каждое
+// обращение к БД — это только COM_STMT_EXECUTE с бинарными параметрами
+// (без парсинга текста на сервере и без экранирования значений).
+// Все тексты берутся из dbRegistry() — единственного места, где SQL
+// написан руками (см. TrinityDbStatements.cpp).
+bool TrinityCore::prepareStatements() {
+    if (!m_mysql) return false;
+
+    const DbQueryDef* reg = dbRegistry();
+    for (size_t i = 0; i < static_cast<size_t>(DbQuery::Count); ++i) {
+        const DbQueryDef& def = reg[i];
+
+        MYSQL_STMT* stmt = mysql_stmt_init(m_mysql);
+        if (!stmt) {
+            acutPrintf(_T("\n[TrinityCore] mysql_stmt_init failed for '%hs'\n"), def.name);
+            finalizeStatements();
+            return false;
+        }
+
+        if (mysql_stmt_prepare(stmt, def.sql, (unsigned long)strlen(def.sql)) != 0) {
+            // Например: в базе нет виртуального столбца code / таблицы synapse.
+            acutPrintf(_T("\n[TrinityCore] PREPARE failed for '%hs' (%u): %hs\n"),
+                       def.name, mysql_stmt_errno(stmt), mysql_stmt_error(stmt));
+            m_stmts[i].reset(stmt);   // закрываем неполноценный хэндл через RAII
+            finalizeStatements();
+            return false;
+        }
+
+        // Проверка согласованности реестра и реальной формы запроса:
+        // если в SQL добавили/убрали '?', а paramTypes не обновили —
+        // падаем здесь, на подключении, а не на первом же EXECUTE.
+        const unsigned int ph = mysql_stmt_param_count(stmt);
+        if (ph != static_cast<unsigned int>(def.paramTypes.size())) {
+            acutPrintf(_T("\n[TrinityCore] Registry mismatch for '%hs': %u placeholder(s) in SQL, %zu declared param type(s).\n"),
+                       def.name, ph, def.paramTypes.size());
+            m_stmts[i].reset(stmt);
+            finalizeStatements();
+            return false;
+        }
+
+        m_stmts[i].reset(stmt);   // владение переходит в RAII-обёртку
+    }
+    return true;
+}
+
+// ============================================
+// ЗАКРЫТИЕ СТЕЙТМЕНТОВ РЕЕСТРА
+// ============================================
+void TrinityCore::finalizeStatements() {
+    for (auto& g : m_stmts)
+        g.reset();   // mysql_stmt_close + обнуление; повторный вызов безопасен
 }
 
 // ============================================
